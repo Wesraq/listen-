@@ -42,7 +42,7 @@ class PlayerSheet extends StatelessWidget {
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
         padding: const EdgeInsets.all(24),
-        child: const Text('Nothing is playing.'),
+        child: const Text('Nothing playing right now.'),
       );
     }
 
@@ -111,7 +111,7 @@ class _AudiobookPlayer extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: const Text(
-                      'AUDIOBOOK',
+                      'NOW PLAYING',
                       style: TextStyle(
                         color: _accent,
                         fontSize: 10,
@@ -168,7 +168,7 @@ class _AudiobookPlayer extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Narrated · ${title.author}',
+                'Narrated by ${title.author}',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.58)),
               ),
@@ -228,7 +228,7 @@ class _AudiobookPlayer extends StatelessWidget {
               if (title.showsAds) ...[
                 const SizedBox(height: 10),
                 Text(
-                  'Free with ads · supports the creator',
+                  'Includes short ads that support this creator',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.42), fontSize: 12),
                 ),
@@ -268,7 +268,7 @@ class _AudiobookPlayer extends StatelessWidget {
                     ),
                     const Spacer(),
                     Text(
-                      '${(progress * 100).round()}% of chapter',
+                      '${(progress * 100).round()}%',
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.32), fontSize: 11),
                     ),
                     const Spacer(),
@@ -351,7 +351,7 @@ class _AudiobookPlayer extends StatelessWidget {
                   const SizedBox(width: 8),
                   _audiobookPill(
                     label: session.sleepTimerMinutesRemaining == null
-                        ? 'Sleep'
+                        ? 'Sleep timer'
                         : 'Sleep ${session.sleepTimerMinutesRemaining}m',
                     onTap: () {
                       final current = session.sleepTimerMinutesRemaining;
@@ -367,6 +367,7 @@ class _AudiobookPlayer extends StatelessWidget {
                   ),
                   const Spacer(),
                   IconButton(
+                    tooltip: 'Add a note',
                     onPressed: () => openContentNotesSheet(
                       context,
                       titleId: title.id,
@@ -377,6 +378,7 @@ class _AudiobookPlayer extends StatelessWidget {
                     icon: Icon(Icons.bookmark_add_outlined, color: Colors.white.withValues(alpha: 0.75)),
                   ),
                   IconButton(
+                    tooltip: session.isDownloaded(title.id) ? 'Remove download' : 'Download for offline',
                     onPressed: () async {
                       if (session.isDownloaded(title.id)) {
                         await session.removeDownload(title.id);
@@ -404,7 +406,7 @@ class _AudiobookPlayer extends StatelessWidget {
                   ),
                   const Spacer(),
                   Text(
-                    '${tracks.length}',
+                    '${tracks.length} ${tracks.length == 1 ? 'chapter' : 'chapters'}',
                     style: TextStyle(
                       color: _accent.withValues(alpha: 0.9),
                       fontWeight: FontWeight.w700,
@@ -457,9 +459,7 @@ class _AudiobookPlayer extends StatelessWidget {
               }),
               const SizedBox(height: 8),
               Text(
-                !session.usingRealAudio
-                    ? 'Playback progress is saved to your library.'
-                    : 'Progress saved to your library.',
+                'Your place is saved automatically.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 11),
               ),
@@ -623,7 +623,7 @@ class _PodcastPlayer extends StatelessWidget {
               if (title.showsAds) ...[
                 const SizedBox(height: 10),
                 Text(
-                  'Free with ads · supports the creator',
+                  'Includes short ads that support this creator',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                 ),
@@ -728,8 +728,8 @@ class _PodcastPlayer extends StatelessWidget {
                   const SizedBox(width: 8),
                   _pill(
                     label: session.sleepTimerMinutesRemaining == null
-                        ? 'Sleep'
-                        : '${session.sleepTimerMinutesRemaining}m',
+                        ? 'Sleep timer'
+                        : 'Sleep ${session.sleepTimerMinutesRemaining}m',
                     onTap: () {
                       final current = session.sleepTimerMinutesRemaining;
                       final next = switch (current) {
@@ -743,6 +743,7 @@ class _PodcastPlayer extends StatelessWidget {
                   ),
                   const Spacer(),
                   IconButton(
+                    tooltip: 'Add a note',
                     onPressed: () => openContentNotesSheet(
                       context,
                       titleId: title.id,
@@ -753,6 +754,7 @@ class _PodcastPlayer extends StatelessWidget {
                     icon: Icon(Icons.comment_outlined, color: Colors.white.withValues(alpha: 0.75)),
                   ),
                   IconButton(
+                    tooltip: session.isDownloaded(title.id) ? 'Remove download' : 'Download for offline',
                     onPressed: () async {
                       if (session.isDownloaded(title.id)) {
                         await session.removeDownload(title.id);
@@ -819,9 +821,7 @@ class _PodcastPlayer extends StatelessWidget {
               }),
               const SizedBox(height: 8),
               Text(
-                !session.usingRealAudio
-                    ? 'Playback progress is saved to your library.'
-                    : 'Progress saved to your library.',
+                'Your place is saved automatically.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
               ),

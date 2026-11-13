@@ -1,3 +1,5 @@
+import 'catalogue.dart';
+
 class PriceQuote {
   const PriceQuote({required this.currency, required this.amountMinor});
 
@@ -227,13 +229,73 @@ class CreatorDraft {
       );
     }
     if (isAudioFormat) {
+      final isPodcast = format.toLowerCase() == 'podcast';
+      final noun = isPodcast ? 'episode' : 'track';
       bits.add(
         episodes.isEmpty
-            ? 'No episodes yet'
-            : '${episodes.length} episode${episodes.length == 1 ? '' : 's'}',
+            ? 'No ${noun}s yet'
+            : '${episodes.length} $noun${episodes.length == 1 ? '' : 's'}',
       );
     }
     return bits.join(' · ');
+  }
+
+  ContentFormat get catalogueFormat {
+    final key = format.trim().toLowerCase();
+    if (key.contains('ebook') && key.contains('audio')) return ContentFormat.ebookAudio;
+    if (key == 'audiobook') return ContentFormat.audiobook;
+    if (key == 'podcast') return ContentFormat.podcast;
+    return ContentFormat.ebook;
+  }
+
+  /// Deterministic catalogue id matching the API publish formula.
+  String get inferredPublishedTitleId {
+    final explicit = publishedTitleId?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final raw = id
+        .replaceFirst(RegExp(r'^draft-'), '')
+        .replaceFirst(RegExp(r'^local-from-creator-'), '')
+        .replaceFirst(RegExp(r'^local-from-'), '')
+        .replaceFirst(RegExp(r'^local-'), '');
+    final slice = raw.length <= 12 ? raw : raw.substring(0, 12);
+    return 'creator-$slice';
+  }
+
+  /// Build a catalogue card when the API catalogue is missing this live title.
+  TitleItem toCatalogueTitle({required String author}) {
+    final quote = prices.isEmpty ? null : prices.first;
+    final lengthBits = <String>[];
+    if (isEbook && chapters.isNotEmpty) {
+      lengthBits.add('${chapters.length} chapter${chapters.length == 1 ? '' : 's'}');
+    }
+    if (isAudioFormat && episodes.isNotEmpty) {
+      final isPodcast = format.toLowerCase() == 'podcast';
+      final noun = isPodcast ? 'episode' : 'track';
+      lengthBits.add('${episodes.length} $noun${episodes.length == 1 ? '' : 's'}');
+    }
+    return TitleItem(
+      id: inferredPublishedTitleId,
+      name: title,
+      author: author,
+      category: genre?.trim().isNotEmpty == true ? genre!.trim() : 'Fiction',
+      format: catalogueFormat,
+      priceMinor: quote?.amountMinor ?? 0,
+      currency: quote?.currency ?? 'ZMW',
+      prices: prices
+          .map((p) => (currency: p.currency, amountMinor: p.amountMinor))
+          .toList(),
+      imageAsset: switch (catalogueFormat) {
+        ContentFormat.podcast => 'assets/images/zambezi.jpg',
+        ContentFormat.audiobook => 'assets/images/quiet.jpg',
+        _ => 'assets/images/jacaranda.jpg',
+      },
+      rating: 'New',
+      length: lengthBits.isEmpty ? format : lengthBits.join(' · '),
+      description: 'Available on Listen+.',
+      monetisationMode: monetisationMode,
+      subscriptionEligible: subscriptionEligible,
+      mediaName: mediaName,
+    );
   }
 
   bool get canEdit => status == 'draft' || status == 'submitted' || status == 'live';
@@ -577,10 +639,10 @@ class ContentNote {
     if (anchor == 'audio') {
       final m = position.floor() ~/ 60;
       final s = position.floor() % 60;
-      return '$locationId · $m:${s.toString().padLeft(2, '0')}';
+      return 'At $m:${s.toString().padLeft(2, '0')}';
     }
-    final pct = (position * 100).round();
-    return '$locationId · $pct%';
+    final pct = (position * 100).round().clamp(0, 100);
+    return 'About $pct% through the chapter';
   }
 
   Map<String, dynamic> toJson() => {

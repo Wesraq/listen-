@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../data/catalogue.dart';
 import '../state/session.dart';
 import '../widgets/page_intro.dart';
 import '../widgets/status_views.dart';
@@ -25,13 +24,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
     final downloadIds = session.downloads.map((d) => d.titleId).toSet();
+    final ownedIds = session.libraryOwnedIds;
     final ids = switch (tab) {
-      0 => session.owned,
+      0 => ownedIds,
       1 => session.saved,
       _ => downloadIds,
     };
-    final items = titles.where((title) {
-      if (!ids.contains(title.id)) return false;
+    final items = session.titlesForIds(ids).where((title) {
       if (format == 'All') return true;
       if (title.formatLabel == format) return true;
       if (title.isDualFormat && (format == 'Ebook' || format == 'Audiobook')) {
@@ -45,7 +44,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         const SliverToBoxAdapter(
           child: PageIntro(
             title: 'Your library',
-            text: 'A little escape, always within reach.',
+            text: 'Everything you own, save, and keep offline.',
           ),
         ),
         SliverToBoxAdapter(
@@ -53,7 +52,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: SegmentedButton<int>(
               segments: [
-                ButtonSegment(value: 0, label: Text('Owned (${session.owned.length})')),
+                ButtonSegment(value: 0, label: Text('Owned (${ownedIds.length})')),
                 ButtonSegment(value: 1, label: Text('Saved (${session.saved.length})')),
                 ButtonSegment(value: 2, label: Text('Downloads (${session.downloads.length})')),
               ],
@@ -94,7 +93,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               icon: Icons.download_outlined,
               title: 'Nothing downloaded',
               message:
-                  'Open a title you own and tap Download for offline EPUB chapters or audio cache.',
+                  'Open a title you own and tap Download to keep it for offline reading or listening.',
             ),
           )
         else if (items.isEmpty)
@@ -102,12 +101,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
             hasScrollBody: false,
             child: EmptyStateView(
               icon: tab == 0 ? Icons.library_books_outlined : Icons.bookmark_border,
-              title: tab == 0 ? 'Nothing owned yet' : 'Nothing saved yet',
+              title: tab == 0
+                  ? (ids.isEmpty ? 'Nothing owned yet' : 'Nothing in this format')
+                  : (ids.isEmpty ? 'Nothing saved yet' : 'Nothing in this format'),
               message: tab == 0
-                  ? 'Library shows titles you own — purchases, free unlocks, and your own published Studio titles. Browse the catalogue on Home or Search, then buy or save.'
-                  : 'Save a title from Home or Search to find it later.',
-              actionLabel: 'Discover stories',
-              onAction: widget.onDiscover,
+                  ? (ids.isEmpty
+                      ? 'Purchases, free titles, and your published Studio work appear here. Browse Home or Search to find something new.'
+                      : 'Try another format filter to see the titles you own.')
+                  : (ids.isEmpty
+                      ? 'Save a title from Home or Search to find it later.'
+                      : 'Try another format filter to see your saved titles.'),
+              actionLabel: ids.isEmpty ? 'Discover stories' : null,
+              onAction: ids.isEmpty ? widget.onDiscover : null,
             ),
           )
         else

@@ -113,7 +113,7 @@ class _ContentNotesSheetState extends State<ContentNotesSheet> {
     final path = activePath;
     if (path == null || !File(path).existsSync() || elapsedSec <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Capture a voice note first (max 60 seconds).')),
+        const SnackBar(content: Text('Record a short voice note first (up to 60 seconds).')),
       );
       return;
     }
@@ -128,7 +128,7 @@ class _ContentNotesSheetState extends State<ContentNotesSheet> {
         createdAtMs: DateTime.now().millisecondsSinceEpoch,
         voicePath: path,
         voiceDurationSec: elapsedSec.toDouble().clamp(1, 60),
-        text: 'Voice note · ${elapsedSec}s',
+        text: 'Voice note · $elapsedSec sec',
       ),
     );
     setState(() {
@@ -148,10 +148,12 @@ class _ContentNotesSheetState extends State<ContentNotesSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Comments & notes', style: Theme.of(context).textTheme.titleLarge),
+          Text('Notes', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           Text(
-            'Pinned to ${widget.anchor == 'audio' ? 'audio timestamp' : 'chapter'} · ${widget.locationId}',
+            widget.anchor == 'audio'
+                ? 'Saved to this moment in the audio'
+                : 'Saved to this place in the chapter',
             style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.6), fontSize: 13),
           ),
           const SizedBox(height: 12),
@@ -160,37 +162,38 @@ class _ContentNotesSheetState extends State<ContentNotesSheet> {
             minLines: 2,
             maxLines: 4,
             decoration: const InputDecoration(
-              labelText: 'Text note',
+              labelText: 'Write a note',
+              hintText: 'A thought, quote, or reminder…',
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 8),
           Row(
             children: [
-              FilledButton(onPressed: () => _saveText(session), child: const Text('Pin text')),
+              FilledButton(onPressed: () => _saveText(session), child: const Text('Save note')),
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: _toggleRecord,
                 icon: Icon(recording ? Icons.stop : Icons.mic),
-                label: Text(recording ? 'Stop (${elapsedSec}s)' : 'Voice (≤60s)'),
+                label: Text(recording ? 'Stop (${elapsedSec}s)' : 'Record voice'),
               ),
               const SizedBox(width: 8),
               if (!recording && activePath != null)
-                TextButton(onPressed: () => _saveVoice(session), child: const Text('Pin voice')),
+                TextButton(onPressed: () => _saveVoice(session), child: const Text('Save voice')),
             ],
           ),
           const SizedBox(height: 4),
           Text(
-            'Voice notes are capped at 60 seconds and stored with the chapter or audio timestamp.',
+            'Voice notes can be up to 60 seconds and stay attached to this spot.',
             style: TextStyle(fontSize: 12, color: ListenColors.ink.withValues(alpha: 0.5)),
           ),
           const SizedBox(height: 16),
-          Text('Pinned here', style: Theme.of(context).textTheme.titleMedium),
+          Text('Your notes here', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           if (items.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('No notes yet for this title.'),
+              child: Text('No notes yet — add one while you read or listen.'),
             )
           else
             Flexible(

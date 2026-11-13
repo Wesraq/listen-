@@ -64,8 +64,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return aMatch.compareTo(bMatch);
       });
     final continueItems = session.continueTitles(limit: 6);
-    final fallbackContinue =
-        continueItems.isNotEmpty ? continueItems : titles.where((title) => session.isOwned(title.id)).take(2).toList();
+    final fallbackContinue = continueItems.isNotEmpty
+        ? continueItems
+        : session.titlesForIds(session.libraryOwnedIds).take(2).toList();
     final featured = collections.first;
     final firstName = session.displayName.trim().split(RegExp(r'\s+')).first;
 
@@ -237,7 +238,12 @@ class _HomeScreenState extends State<HomeScreen> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text('Browse categories', style: Theme.of(context).textTheme.titleLarge),
+            child: Text(
+              'Browse categories',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
           ),
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 10)),
@@ -342,12 +348,18 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
         if (filtered.isEmpty)
-          const SliverFillRemaining(
-            hasScrollBody: false,
-            child: EmptyStateView(
-              icon: Icons.search_off,
-              title: 'Nothing in this format',
-              message: 'Try another format filter to keep exploring.',
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+              child: EmptyStateView(
+                icon: titles.isEmpty ? Icons.menu_book_outlined : Icons.search_off,
+                title: titles.isEmpty
+                    ? 'No titles yet'
+                    : 'Nothing in this format',
+                message: titles.isEmpty
+                    ? 'Pull to refresh, or publish from Studio to fill your catalogue.'
+                    : 'Try another format filter above to keep exploring.',
+              ),
             ),
           )
         else

@@ -41,7 +41,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
-    final purchases = titles.where((title) => session.isOwned(title.id)).toList();
+    final purchases = session.titlesForIds(session.libraryOwnedIds);
     final controller = nameController!;
 
     return ListView(
@@ -49,7 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       children: [
         const PageIntro(
           title: 'Your profile',
-          text: 'Make this little corner of Listen+ your own.',
+          text: 'Manage how you show up on Listen+.',
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -70,13 +70,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         Text(
                           session.isGuest
-                              ? 'Guest · browse without purchases syncing'
+                              ? 'Browsing as guest'
                               : session.contact.isEmpty
                                   ? 'Signed in'
                                   : session.contact,
                         ),
                         Text(
-                          'Creator: ${session.creatorState.name}',
+                          switch (session.creatorState) {
+                            CreatorApplicationState.newApplicant => 'Listener account',
+                            CreatorApplicationState.pending => 'Creator application under review',
+                            CreatorApplicationState.approved => 'Creator · Studio unlocked',
+                          },
                           style: TextStyle(fontSize: 12, color: ListenColors.ink.withValues(alpha: 0.55)),
                         ),
                       ],
@@ -153,7 +157,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 TextButton(
                   onPressed: () => session.resetOnboardingForDemo(),
-                  child: const Text('Replay onboarding (demo)'),
+                  child: const Text('Replay onboarding'),
                 ),
               ],
               const SizedBox(height: 24),
@@ -161,7 +165,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 8),
               if (purchases.isEmpty)
                 Text(
-                  'No purchases yet. Successful checkouts appear here with amount and status.',
+                  'No purchases yet. Titles you buy will show up here.',
                   style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.6)),
                 )
               else
@@ -174,7 +178,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     title: Text(title.name),
                     subtitle: Text(
-                      '${title.formatLabel} · ${title.isFree ? 'Free entitlement' : '${money(title.priceMinor)} · Simulated success'}',
+                      '${title.formatLabel} · ${title.isFree ? 'Free' : '${money(title.priceMinor)} · Purchased'}',
                     ),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => openTitleFlow(context, title),

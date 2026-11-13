@@ -365,3 +365,23 @@ void replaceCatalogue(List<TitleItem> next, {required bool fromApi}) {
   titles = List<TitleItem>.from(next);
   catalogueFromApi = fromApi;
 }
+
+/// Keep existing catalogue rows and add any missing ids (e.g. live Studio titles).
+void mergeCatalogue(List<TitleItem> extras, {bool? fromApi}) {
+  if (extras.isEmpty) {
+    if (fromApi != null) catalogueFromApi = fromApi;
+    return;
+  }
+  final byId = <String, TitleItem>{for (final title in titles) title.id: title};
+  var changed = false;
+  for (final title in extras) {
+    if (title.id.isEmpty) continue;
+    if (byId.containsKey(title.id)) continue;
+    byId[title.id] = title;
+    changed = true;
+  }
+  if (changed) {
+    titles = byId.values.toList();
+  }
+  if (fromApi != null) catalogueFromApi = fromApi;
+}

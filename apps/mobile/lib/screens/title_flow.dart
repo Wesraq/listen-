@@ -138,12 +138,12 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
               const SizedBox(height: 4),
               Text(
                 title.showsAds
-                    ? 'Free with ads · short sponsorships support the creator.'
+                    ? 'Free with ads — short sponsorships help support this creator.'
                     : title.resolvedMonetisationMode == 'subscription'
-                        ? 'Included with Listen+ subscription.'
+                        ? 'Included with your Listen+ subscription.'
                         : title.isFree
                             ? 'Free on Listen+.'
-                            : 'Buy once · keep in your library.',
+                            : 'Buy once and keep it in your library.',
                 style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.5), fontSize: 12),
               ),
               const SizedBox(height: 20),
@@ -203,15 +203,15 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                   ),
                   label: Text(
                     session.isDownloaded(title.id)
-                        ? 'Downloaded · remove offline'
-                        : (title.isAudio ? 'Download for offline listening' : 'Download EPUB offline'),
+                        ? 'Downloaded · tap to remove'
+                        : (title.isAudio ? 'Download for offline listening' : 'Download for offline reading'),
                   ),
                 ),
             ] else ...[
               Text(_checkoutTitle(), style: Theme.of(context).textTheme.headlineMedium),
               const SizedBox(height: 8),
               Text(
-                'Complete purchase to unlock this title in your library.',
+                'Confirm payment to add this title to your library.',
                 style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.65)),
               ),
               const SizedBox(height: 16),
@@ -254,7 +254,7 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.hourglass_top),
                   title: Text('Confirming payment'),
-                  subtitle: Text('Almost done — your library updates when payment clears.'),
+                  subtitle: Text('Almost there — your library updates when payment clears.'),
                 ),
                 FilledButton(
                   onPressed: () async {
@@ -262,15 +262,15 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                     if (!mounted) return;
                     setState(() => checkout = CheckoutState.success);
                   },
-                  child: const Text('Complete purchase'),
+                  child: const Text('Confirm payment'),
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton(
                   onPressed: () => setState(() => checkout = CheckoutState.failed),
-                  child: const Text('Simulate failure'),
+                  child: const Text('Payment didn’t go through'),
                 ),
               ] else if (checkout == CheckoutState.failed) ...[
-                const Text('No payment was collected. Your library is unchanged.'),
+                const Text('We couldn’t complete this payment. Nothing was charged, and your library is unchanged.'),
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () => setState(() => checkout = CheckoutState.review),
@@ -280,7 +280,7 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.check_circle, color: ListenColors.leaf),
-                  title: Text('Simulated purchase complete. ${title.name} is now in your library.'),
+                  title: Text('${title.name} is now in your library.'),
                 ),
                 FilledButton(
                   onPressed: () {
@@ -299,9 +299,9 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
 
   String _checkoutTitle() => switch (checkout) {
         CheckoutState.review => 'Review your purchase',
-        CheckoutState.pending => 'Payment pending',
+        CheckoutState.pending => 'Confirming payment',
         CheckoutState.failed => 'Payment unsuccessful',
-        CheckoutState.success => 'Your next story is ready',
+        CheckoutState.success => 'You’re all set',
         null => title.name,
       };
 
@@ -546,7 +546,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               if (tokens.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text('No bookmarks yet. Tap the bookmark icon to save chapter + scroll position.'),
+                  child: Text('No bookmarks yet. Tap the bookmark icon to save your place in a chapter.'),
                 )
               else
                 ...tokens.map((token) {
@@ -644,7 +644,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  widget.sampleOnly ? 'SAMPLE' : 'PDF',
+                  widget.sampleOnly ? 'Sample' : 'PDF',
                   style: TextStyle(
                     color: ListenColors.coral,
                     fontWeight: FontWeight.w700,
@@ -659,7 +659,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'For chapter controls, fonts and bookmarks, re-upload as EPUB.',
+                  'Chapter controls and bookmarks work best with EPUB editions.',
                   style: TextStyle(color: ink.withValues(alpha: 0.55), fontSize: 12),
                 ),
               ),
@@ -849,7 +849,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
               children: [
                 Text(
-                  widget.sampleOnly ? 'SAMPLE' : 'READING',
+                  widget.sampleOnly ? 'Sample' : 'Reading',
                   style: TextStyle(
                     color: ListenColors.coral,
                     fontWeight: FontWeight.w700,
@@ -860,7 +860,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 if (widget.title.showsAds) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'Free with ads · light between-chapter sponsorships support the creator',
+                    'Includes short ads between chapters that support this creator',
                     style: TextStyle(color: ink.withValues(alpha: 0.55), fontSize: 12),
                   ),
                 ],

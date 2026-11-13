@@ -190,7 +190,7 @@ class _SearchScreenState extends State<SearchScreen> {
               title: 'No titles matched',
               message: query.isEmpty
                   ? 'Try a search or open a popular category.'
-                  : 'No sample titles matched “$query”. Try another word or clear filters.',
+                  : 'Nothing matched “$query”. Try another word or clear filters.',
               actionLabel: freeOnly || format != 'All' ? 'Clear filters' : null,
               onAction: freeOnly || format != 'All'
                   ? () => setState(() {

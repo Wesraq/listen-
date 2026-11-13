@@ -191,6 +191,8 @@ class SessionState extends ChangeNotifier {
       await _syncSalesFromApi();
       await _syncDraftsFromApi();
       await _syncNotesFromApi();
+      _mergeLiveDraftsIntoCatalogue();
+      _ensureCreatorOwnsLiveTitles();
       await _persist();
       notifyListeners();
     });
@@ -203,6 +205,8 @@ class SessionState extends ChangeNotifier {
       await _syncDraftsFromApi();
       await _syncNotesFromApi();
     }
+    _mergeLiveDraftsIntoCatalogue();
+    _ensureCreatorOwnsLiveTitles();
 
     ready = true;
     notifyListeners();
@@ -222,16 +226,107 @@ class SessionState extends ChangeNotifier {
   Future<void> _syncCatalogueFromApi() async {
     apiReachable = await _api.health();
     if (!apiReachable) {
-      replaceCatalogue(sampleTitles, fromApi: false);
+      // Keep the last good catalogue — never wipe owned/creator titles offline.
+      _mergeLiveDraftsIntoCatalogue();
       return;
     }
     final remote = await _api.fetchTitles();
     if (remote != null) {
       replaceCatalogue(remote, fromApi: true);
       await _syncCatalogueParts(remote);
-    } else {
-      replaceCatalogue(sampleTitles, fromApi: false);
     }
+    // Fill gaps when API catalogue lags behind live Studio drafts.
+    _mergeLiveDraftsIntoCatalogue();
+  }
+
+  void _mergeLiveDraftsIntoCatalogue() {
+    final author = displayName.trim().isEmpty ? 'Creator' : displayName.trim();
+    final extras = <TitleItem>[];
+    for (var i = 0; i < drafts.length; i++) {
+      final draft = drafts[i];
+      if (draft.status != 'live' && draft.status != 'submitted') continue;
+      final id = _publishedIdForDraft(draft);
+      if (id == null) continue;
+      if (draft.publishedTitleId != id) {
+        drafts[i] = draft.copyWith(publishedTitleId: id);
+      }
+      final ready = drafts[i];
+      if (titleById(id) != null) {
+        overlayDraftParts(ready);
+        continue;
+      }
+      extras.add(ready.toCatalogueTitle(author: author));
+      overlayDraftParts(ready);
+    }
+    if (extras.isNotEmpty) {
+      mergeCatalogue(extras, fromApi: catalogueFromApi);
+    }
+  }
+
+  /// Creators keep their live Studio titles in Library even if entitlement sync lags.
+  bool _ensureCreatorOwnsLiveTitles() {
+    var changed = false;
+    for (final draft in drafts) {
+      if (draft.status != 'live' && draft.status != 'submitted') continue;
+      final id = _publishedIdForDraft(draft);
+      if (id == null) continue;
+      if (owned.add(id)) {
+        changed = true;
+        _pendingOwnedSync.add(id);
+      }
+    }
+    if (changed) _ensureSyncRetry();
+    return changed;
+  }
+
+  String? _publishedIdForDraft(CreatorDraft draft) {
+    if (draft.status != 'live' && draft.status != 'submitted') {
+      final explicit = draft.publishedTitleId?.trim();
+      return (explicit == null || explicit.isEmpty) ? null : explicit;
+    }
+    return draft.inferredPublishedTitleId;
+  }
+
+  /// Owned purchases plus the creator's own live/submitted Studio titles.
+  Set<String> get libraryOwnedIds {
+    final ids = <String>{...owned};
+    for (final draft in drafts) {
+      if (draft.status != 'live' && draft.status != 'submitted') continue;
+      final id = _publishedIdForDraft(draft);
+      if (id != null) ids.add(id);
+    }
+    return ids;
+  }
+
+  /// Resolve owned/saved/download ids into catalogue cards (with draft fallback).
+  List<TitleItem> titlesForIds(Iterable<String> ids) {
+    _mergeLiveDraftsIntoCatalogue();
+    final author = displayName.trim().isEmpty ? 'Creator' : displayName.trim();
+    final items = <TitleItem>[];
+    final seen = <String>{};
+    for (final id in ids) {
+      if (id.isEmpty || !seen.add(id)) continue;
+      final existing = titleById(id);
+      if (existing != null) {
+        items.add(existing);
+        continue;
+      }
+      CreatorDraft? draft;
+      for (final candidate in drafts) {
+        if (_publishedIdForDraft(candidate) == id) {
+          draft = candidate;
+          break;
+        }
+      }
+      if (draft != null) {
+        final ready = draft.copyWith(publishedTitleId: id);
+        final title = ready.toCatalogueTitle(author: author);
+        mergeCatalogue([title], fromApi: catalogueFromApi);
+        overlayDraftParts(ready);
+        items.add(title);
+      }
+    }
+    return items;
   }
 
   Future<void> _syncCatalogueParts(List<TitleItem> remoteTitles) async {
@@ -355,6 +450,8 @@ class SessionState extends ChangeNotifier {
     saved
       ..clear()
       ..addAll(remote.savedIds);
+    // Remote library can lag behind live Studio approvals — keep creator titles.
+    _ensureCreatorOwnsLiveTitles();
     librarySyncedFromApi = true;
   }
 
@@ -764,6 +861,12 @@ class SessionState extends ChangeNotifier {
       // If drafts API was unreachable, still surface your live creator titles.
       _hydrateStudioDraftsFromCatalogue();
       await _backfillDraftPartsFromCatalogue();
+      // Drafts may have arrived after the first catalogue merge.
+      _mergeLiveDraftsIntoCatalogue();
+      _ensureCreatorOwnsLiveTitles();
+    } else {
+      _mergeLiveDraftsIntoCatalogue();
+      _ensureCreatorOwnsLiveTitles();
     }
     notifyListeners();
     await _persist();

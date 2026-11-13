@@ -30,7 +30,7 @@ class StudioScreen extends StatelessWidget {
           const SliverToBoxAdapter(
             child: PageIntro(
               title: 'Studio',
-              text: 'Publish eBooks, audiobooks and podcasts — each with its own upload flow.',
+              text: 'Publish ebooks, audiobooks and podcasts — each with its own upload flow.',
             ),
           ),
           SliverPadding(
@@ -82,18 +82,25 @@ class StudioScreen extends StatelessWidget {
                     children: [
                       Text('Become a creator', style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 8),
-                      const Text('Profile, payout destination and rights declarations are reviewed before publishing.'),
+                      const Text(
+                        'Tell us who you are and where you’d like to get paid. We’ll review your profile and rights before Studio unlocks.',
+                      ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: name,
-                        decoration: const InputDecoration(labelText: 'Creator / imprint name', border: OutlineInputBorder()),
-                        validator: (value) => (value == null || value.trim().isEmpty) ? 'Required' : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Creator or imprint name',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) =>
+                            (value == null || value.trim().isEmpty) ? 'Enter a creator name' : null,
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: payout,
                         decoration: const InputDecoration(
-                          labelText: 'Payout setup (prototype)',
+                          labelText: 'Preferred payout method',
+                          helperText: 'We’ll confirm details before your first payout.',
                           border: OutlineInputBorder(),
                         ),
                       ),
@@ -102,7 +109,7 @@ class StudioScreen extends StatelessWidget {
                         value: accepted,
                         onChanged: (value) => setModalState(() => accepted = value ?? false),
                         controlAffinity: ListTileControlAffinity.leading,
-                        title: const Text('I agree to the Creator Agreement and rights declarations'),
+                        title: const Text('I agree to the Creator Agreement and confirm I hold the rights to publish'),
                       ),
                       TextButton(
                         onPressed: () => openLegalDoc(context, LegalDoc.creatorAgreement),
@@ -425,7 +432,7 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
             ),
           const SizedBox(height: 8),
           Text(
-            'eBooks create chapters from the uploaded file. Audiobooks and podcasts use manual tracks/episodes. Submit for review when ready.',
+            'Ebooks create chapters from the uploaded file. Audiobooks and podcasts use tracks or episodes you add. Submit for review when ready.',
             style: TextStyle(fontSize: 12, height: 1.4, color: ListenColors.ink.withValues(alpha: 0.55)),
           ),
         ] else ...[
@@ -434,7 +441,7 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
             onRefresh: () => session.refreshSales(),
             onPayout: () {
               session.showNotice(
-                'Payout request recorded for ${sales.money(sales.availableMinor)}. Finance approval happens in admin web.',
+                'Payout request recorded for ${sales.money(sales.availableMinor)}. We’ll confirm it before sending funds.',
               );
             },
           ),
@@ -568,7 +575,7 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                       draft.isDualFormat
                           ? 'Chapters & tracks'
                           : (draft.isEbook
-                              ? 'eBook chapters'
+                              ? 'Ebook chapters'
                               : (draft.format == 'Podcast' ? 'Episodes' : 'Tracks')),
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
@@ -590,14 +597,14 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                                 borderRadius: BorderRadius.circular(14),
                               ),
                               child: const Text(
-                                'eBook chapters come from the uploaded file. You can rename them here or rebuild from the file.',
+                                'Ebook chapters come from the uploaded file. You can rename them here or rebuild from the file.',
                                 style: TextStyle(height: 1.35),
                               ),
                             ),
                             if (draft.isDualFormat)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 8),
-                                child: Text('eBook chapters', style: Theme.of(context).textTheme.titleMedium),
+                                child: Text('Ebook chapters', style: Theme.of(context).textTheme.titleMedium),
                               ),
                             ...chapters.asMap().entries.map((entry) {
                               final index = entry.key;
@@ -1167,7 +1174,7 @@ class _EarningsPanel extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            _MiniStat(label: 'eBooks', value: sales.money(sales.byFormat.ebookMinor)),
+            _MiniStat(label: 'Ebooks', value: sales.money(sales.byFormat.ebookMinor)),
             const SizedBox(width: 8),
             _MiniStat(label: 'Audiobooks', value: sales.money(sales.byFormat.audiobookMinor)),
           ],

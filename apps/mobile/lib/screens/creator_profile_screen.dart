@@ -41,11 +41,11 @@ class CreatorProfileScreen extends StatelessWidget {
                   Text(creator.bio, style: TextStyle(height: 1.45, color: ListenColors.ink.withValues(alpha: 0.75))),
                   const SizedBox(height: 12),
                   Text(
-                    'Follow arrives when social features ship. For MVP, browse approved works below.',
+                    'Browse their titles below. Following creators is coming soon.',
                     style: TextStyle(fontSize: 12, color: ListenColors.ink.withValues(alpha: 0.55)),
                   ),
                   const SizedBox(height: 20),
-                  Text('Works', style: Theme.of(context).textTheme.titleLarge),
+                  Text('Titles', style: Theme.of(context).textTheme.titleLarge),
                 ],
               ),
             ),

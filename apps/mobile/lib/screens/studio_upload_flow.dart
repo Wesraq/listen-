@@ -105,13 +105,13 @@ class _FormatPicker extends StatelessWidget {
         Text('What are you publishing?', style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 8),
         Text(
-          'Each format has its own upload flow. eBooks build chapters from the file; audiobooks and podcasts let you add parts manually.',
+          'Each format has its own upload flow. Ebooks build chapters from the file; audiobooks and podcasts let you add parts yourself.',
           style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.62), height: 1.4),
         ),
         const SizedBox(height: 18),
         _FormatHeroCard(
           icon: Icons.menu_book_rounded,
-          title: 'eBook',
+          title: 'Ebook',
           subtitle: 'Upload EPUB, PDF, or text. Listen+ detects chapters automatically for the reader.',
           accent: ListenColors.leaf,
           onTap: () => onPick('Ebook'),
@@ -132,7 +132,7 @@ class _FormatPicker extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: () => onPick('Ebook + Audiobook'),
           icon: const Icon(Icons.auto_stories_outlined),
-          label: const Text('Same title as eBook + Audiobook'),
+          label: const Text('Same title as ebook + audiobook'),
         ),
       ],
     );
@@ -533,7 +533,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
       extractNote = cleaned.isEmpty
           ? 'No chapters detected — try EPUB or a text-based PDF.'
           : (isPdf && placeholder
-              ? 'PDF attached. Chapter text could not be extracted cleanly — readers will open the PDF pages. Prefer EPUB for editable chapters.'
+              ? 'PDF attached. Chapter text couldn’t be extracted cleanly — readers will open the PDF pages. EPUB gives richer chapter controls.'
               : 'Detected ${cleaned.length} chapter${cleaned.length == 1 ? '' : 's'} from $name');
     });
   }
@@ -1332,7 +1332,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
                         alignment: Alignment.centerLeft,
                         child: TextButton(
                           onPressed: () => _useSampleEpisodeAudio(index),
-                          child: Text(hasAudio ? 'Replace with sample audio' : 'Use sample audio'),
+                          child: Text(hasAudio ? 'Replace with demo audio' : 'Add demo audio'),
                         ),
                       ),
                       Text(
@@ -1489,7 +1489,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
       ),
       const SizedBox(height: 12),
       Text(
-        'Podcast ads: proposed 55% creator / 45% Listen+. Purchases: 70/30 of net receipts.',
+        'Ads: you keep 55% of verified ad revenue. Purchases: you keep 70% of net sales.',
         style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.6), height: 1.35),
       ),
     ];
@@ -1945,7 +1945,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
               Text(
                 hasFile
                     ? (isPdf
-                        ? 'PDF attached · ${chapters.length} chapter shell${chapters.length == 1 ? '' : 's'}'
+                        ? 'PDF attached · ${chapters.length} chapter${chapters.length == 1 ? '' : 's'} ready'
                         : '${chapters.length} chapter${chapters.length == 1 ? '' : 's'} ready')
                     : 'EPUB preferred · TXT · HTML · Markdown · PDF',
                 textAlign: TextAlign.center,
@@ -1969,7 +1969,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           Expanded(
             child: TextButton(
               onPressed: extracting ? null : _useSampleEbook,
-              child: const Text('Use sample'),
+              child: const Text('Try a demo file'),
             ),
           ),
         ],
@@ -2136,7 +2136,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
               ),
               TextButton(
                 onPressed: () => _useSampleEpisodeAudio(index),
-                child: Text('Use sample audio for this ${noun.toLowerCase()}'),
+                child: Text('Add demo audio for this ${noun.toLowerCase()}'),
               ),
               Text(
                 episode.durationSec > 0
@@ -2206,8 +2206,8 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
       const SizedBox(height: 6),
       Text(
         isAudiobookOnly
-            ? 'Choose how this audiobook earns: purchase, free with ads, and/or subscription-pool listening.'
-            : 'Set the list price. Splits apply on net receipts after fees.',
+            ? 'Choose how listeners get this audiobook — and how you earn.'
+            : 'Set the list price. Your share is calculated after payment fees.',
         style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.62), height: 1.35),
       ),
       const SizedBox(height: 14),
@@ -2216,8 +2216,8 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'purchase',
           accent: accent,
           icon: Icons.shopping_bag_outlined,
-          title: 'Individual purchase · 70 / 30',
-          subtitle: 'List price. Creator receives 70% of net receipts on each sale.',
+          title: 'Buy once',
+          subtitle: 'Listeners pay your list price. You keep 70% of net sales.',
           onTap: () => setState(() {
             monetisationMode = 'purchase';
             subscriptionEligible = true;
@@ -2228,9 +2228,9 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'free_with_ads',
           accent: accent,
           icon: Icons.campaign_outlined,
-          title: 'Free with advertising · 55 / 45',
+          title: 'Free with ads',
           subtitle:
-              'Listeners stream free. Verified completed ads credit you 55% of net ad receipts. Light-touch pre/mid-roll only.',
+              'Listeners stream for free. You earn 55% of verified ad revenue from short breaks.',
           onTap: () => setState(() {
             monetisationMode = 'free_with_ads';
             subscriptionEligible = false;
@@ -2242,9 +2242,9 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'subscription',
           accent: accent,
           icon: Icons.workspace_premium_outlined,
-          title: 'Listen+ subscription · pool',
+          title: 'Listen+ subscription',
           subtitle:
-              'Included in subscription. You share the audiobook slice (45%) of the 60% creator pool from qualified minutes.',
+              'Included for subscribers. You earn from the audiobook share of the creator listening pool.',
           onTap: () => setState(() {
             monetisationMode = 'subscription';
             subscriptionEligible = true;
@@ -2260,9 +2260,9 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           contentPadding: EdgeInsets.zero,
           value: subscriptionEligible,
           activeThumbColor: ListenColors.leaf,
-          title: const Text('Also eligible for Listen+ subscription'),
+          title: const Text('Also include in Listen+ subscription'),
           subtitle: Text(
-            'Qualified listening minutes share the audiobook slice of the 60% creator pool.',
+            'Earn extra when subscribers listen to qualified minutes of this title.',
             style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.55)),
           ),
           onChanged: (value) => setState(() => subscriptionEligible = value),
@@ -2291,7 +2291,7 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
       const SizedBox(height: 6),
       if (isEbook)
         Text(
-          'Pick how this eBook earns. Opens alone do not pay — only verified reading, purchases, or completed ads.',
+          'Choose how readers get this book — and how you earn. Simply opening a title doesn’t pay; purchases, ads, and qualified reading do.',
           style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.62), height: 1.35),
         ),
       const SizedBox(height: 12),
@@ -2300,8 +2300,8 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'purchase',
           accent: _ebookAccent,
           icon: Icons.menu_book_rounded,
-          title: 'Buy the book · 70 / 30',
-          subtitle: 'List price listeners pay to keep the eBook.',
+          title: 'Buy the book',
+          subtitle: 'Readers pay your list price and keep the ebook. You keep 70% of net sales.',
           onTap: () => setState(() {
             monetisationMode = 'purchase';
             subscriptionEligible = true;
@@ -2312,9 +2312,9 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'free_with_ads',
           accent: _ebookAccent,
           icon: Icons.campaign_outlined,
-          title: 'Free with advertising · 55 / 45',
+          title: 'Free with ads',
           subtitle:
-              'Readers access free. Occasional between-chapter ads credit you 55% of net ad receipts.',
+              'Readers access for free. Occasional between-chapter ads credit you 55% of verified ad revenue.',
           onTap: () => setState(() {
             monetisationMode = 'free_with_ads';
             subscriptionEligible = false;
@@ -2326,9 +2326,9 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           selected: monetisationMode == 'subscription',
           accent: _ebookAccent,
           icon: Icons.workspace_premium_outlined,
-          title: 'Listen+ subscription · pool',
+          title: 'Listen+ subscription',
           subtitle:
-              'Included for subscribers. Qualified reading shares the eBook 30% slice of the 60% creator pool.',
+              'Included for subscribers. You earn from the ebook share of the creator reading pool.',
           onTap: () => setState(() {
             monetisationMode = 'subscription';
             subscriptionEligible = true;
@@ -2490,7 +2490,7 @@ class _EbookHeroHeader extends StatelessWidget {
                   const SizedBox(width: 12),
                 const Expanded(
                   child: Text(
-                    'eBook studio',
+                    'Ebook studio',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,

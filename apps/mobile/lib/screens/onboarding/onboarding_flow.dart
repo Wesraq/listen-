@@ -317,7 +317,7 @@ class _WelcomeStep extends StatelessWidget {
         children: [
           const Spacer(),
           Text(
-            'listen+',
+            'Listen+',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.displaySmall?.copyWith(
                   fontWeight: FontWeight.w800,
@@ -345,7 +345,7 @@ class _WelcomeStep extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             firebaseReady
-                ? 'Purchases stay in demo mode until the Listen+ API is live.'
+                ? 'You can browse now — checkout finishes once payments are live.'
                 : 'Signing in is warming up — you can browse as a guest in the meantime.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: ListenColors.ink.withValues(alpha: 0.5)),

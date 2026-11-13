@@ -22,7 +22,7 @@ class AdBreakOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = switch (placement) {
-      'midroll' => 'Quick mid-roll',
+      'midroll' => 'A quick pause',
       'chapter' => 'Between chapters',
       _ => 'Before you continue',
     };
@@ -57,7 +57,7 @@ class AdBreakOverlay extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Prototype inventory · max 3 completed ads / hour · skip after 5s.',
+            'You can skip after a few seconds, then pick up right where you left off.',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.58),
               fontSize: 12.5,
@@ -78,7 +78,7 @@ class AdBreakOverlay extends StatelessWidget {
           Row(
             children: [
               Text(
-                skippable ? 'Ready to continue' : 'Skip in ${5 - elapsedSec.clamp(0, 5)}s',
+                skippable ? 'Ready when you are' : 'Skip in ${5 - elapsedSec.clamp(0, 5)}s',
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
               ),
               const Spacer(),
