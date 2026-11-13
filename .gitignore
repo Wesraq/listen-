@@ -44,3 +44,7 @@ apps/mobile/.dart_tool/
 *.njsproj
 *.sln
 *.sw?
+
+# Firebase Admin credentials (never commit)
+service-account.json
+*firebase-adminsdk*.json

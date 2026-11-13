@@ -28,8 +28,21 @@ Widget _titleCover(SessionState session, TitleItem title) {
   );
 }
 
-Future<void> openTitleFlow(BuildContext context, TitleItem title) {
-  return showModalBottomSheet<void>(
+class TitleFlowLaunch {
+  const TitleFlowLaunch({
+    required this.mode,
+    this.sample = false,
+    this.openCreator = false,
+  });
+
+  /// `read` | `listen`
+  final String mode;
+  final bool sample;
+  final bool openCreator;
+}
+
+Future<void> openTitleFlow(BuildContext context, TitleItem title) async {
+  final launch = await showModalBottomSheet<TitleFlowLaunch>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -37,18 +50,54 @@ Future<void> openTitleFlow(BuildContext context, TitleItem title) {
     backgroundColor: ListenColors.sand,
     builder: (_) => TitleFlowSheet(title: title),
   );
+  if (launch == null || !context.mounted) return;
+  if (launch.openCreator) {
+    await openCreatorProfile(context, title.author);
+    return;
+  }
+  await _launchTitleExperience(
+    context,
+    title,
+    mode: launch.mode,
+    sample: launch.sample,
+  );
 }
 
-void openContinueExperience(BuildContext context, TitleItem title) {
+Future<void> openContinueExperience(BuildContext context, TitleItem title) {
+  return _launchTitleExperience(
+    context,
+    title,
+    mode: title.isAudio && !title.isDualFormat ? 'listen' : 'read',
+  );
+}
+
+Future<void> _launchTitleExperience(
+  BuildContext context,
+  TitleItem title, {
+  required String mode,
+  bool sample = false,
+}) async {
   final session = context.read<SessionState>();
-  if (title.isAudio) {
-    session.play(title);
-    openPlayerSheet(context);
-  } else {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => ReaderScreen(title: title)),
+  await session.refreshTitleParts(title.id);
+  if (!context.mounted) return;
+
+  final listen = mode == 'listen' || (mode == 'auto' && title.isAudio && !title.isDualFormat);
+  if (listen) {
+    final tracks = tracksFor(title.id);
+    await session.play(
+      title,
+      trackId: sample && tracks.isNotEmpty ? tracks.first.id : null,
     );
+    if (!context.mounted) return;
+    await openPlayerSheet(context);
+    return;
   }
+
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ReaderScreen(title: title, sampleOnly: sample),
+    ),
+  );
 }
 
 class TitleFlowSheet extends StatefulWidget {
@@ -108,10 +157,9 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
               Text(title.name, style: Theme.of(context).textTheme.headlineMedium),
               const SizedBox(height: 4),
               InkWell(
-                onTap: () {
-                  Navigator.of(context).pop();
-                  openCreatorProfile(context, title.author);
-                },
+                onTap: () => Navigator.of(context).pop(
+                  const TitleFlowLaunch(mode: 'read', openCreator: true),
+                ),
                 child: Text(
                   'By ${title.author}',
                   style: const TextStyle(
@@ -149,28 +197,28 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
               const SizedBox(height: 20),
               if (owned && title.isDualFormat) ...[
                 FilledButton(
-                  onPressed: () => _openOwnedExperience(session, mode: 'read'),
+                  onPressed: () => _openOwnedExperience(mode: 'read'),
                   child: Text(hasProgress ? 'Continue reading' : 'Read now'),
                 ),
                 const SizedBox(height: 10),
                 OutlinedButton(
-                  onPressed: () => _openOwnedExperience(session, mode: 'listen'),
+                  onPressed: () => _openOwnedExperience(mode: 'listen'),
                   child: Text(hasProgress ? 'Continue listening' : 'Listen now'),
                 ),
                 const SizedBox(height: 10),
                 TextButton(
-                  onPressed: () => _openOwnedExperience(session, mode: 'read', sample: true),
+                  onPressed: () => _openOwnedExperience(mode: 'read', sample: true),
                   child: const Text('Read sample'),
                 ),
                 TextButton(
-                  onPressed: () => _openOwnedExperience(session, mode: 'listen', sample: true),
+                  onPressed: () => _openOwnedExperience(mode: 'listen', sample: true),
                   child: const Text('Listen to sample'),
                 ),
               ] else ...[
                 FilledButton(
                   onPressed: () {
                     if (owned) {
-                      _openOwnedExperience(session);
+                      _openOwnedExperience();
                     } else {
                       setState(() => checkout = CheckoutState.review);
                     }
@@ -179,7 +227,7 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                 ),
                 const SizedBox(height: 10),
                 OutlinedButton(
-                  onPressed: () => _openOwnedExperience(session, sample: true),
+                  onPressed: () => _openOwnedExperience(sample: true),
                   child: Text(title.isAudio ? 'Listen to sample' : 'Read sample'),
                 ),
               ],
@@ -283,10 +331,11 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                   title: Text('${title.name} is now in your library.'),
                 ),
                 FilledButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    openContinueExperience(context, title);
-                  },
+                  onPressed: () => Navigator.of(context).pop(
+                    TitleFlowLaunch(
+                      mode: title.isAudio && !title.isDualFormat ? 'listen' : 'read',
+                    ),
+                  ),
                   child: Text(title.isAudio ? 'Start listening' : 'Start reading'),
                 ),
               ],
@@ -305,30 +354,15 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
         null => title.name,
       };
 
-  Future<void> _openOwnedExperience(
-    SessionState session, {
+  void _openOwnedExperience({
     bool sample = false,
     String? mode,
-  }) async {
-    Navigator.of(context).pop();
-    await session.refreshTitleParts(title.id);
-    if (!mounted) return;
-    final listen = mode == 'listen' || (mode == null && title.isAudio && !title.isDualFormat);
-    if (listen) {
-      final tracks = tracksFor(title.id);
-      await session.play(
-        title,
-        trackId: sample && tracks.isNotEmpty ? tracks.first.id : null,
-      );
-      if (!mounted) return;
-      openPlayerSheet(context);
-    } else {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(title: title, sampleOnly: sample),
-        ),
-      );
-    }
+  }) {
+    final resolvedMode = mode ??
+        (title.isAudio && !title.isDualFormat ? 'listen' : 'read');
+    Navigator.of(context).pop(
+      TitleFlowLaunch(mode: resolvedMode, sample: sample),
+    );
   }
 }
 

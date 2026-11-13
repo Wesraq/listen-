@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 
 import { DbService } from '../db/db.service';
+import { FirestoreService } from '../db/firestore.service';
 import {
   categories as seedCategories,
   chaptersByTitle as seedChapters,
@@ -37,24 +38,23 @@ export class CatalogueStore implements OnModuleInit {
     titleIds: [...c.titleIds],
   }));
 
-  constructor(@Inject(DbService) private readonly db: DbService) {}
+  constructor(
+    @Inject(DbService) private readonly db: DbService,
+    @Inject(FirestoreService) private readonly fs: FirestoreService,
+  ) {}
 
   async onModuleInit() {
+    if (this.fs.enabled) {
+      await this.loadFromFirestore();
+      return;
+    }
     if (!this.db.enabled) return;
     try {
       const titles = await this.db.query<{ id: string; payload: TitleDto; sort_order: number }>(
         'SELECT id, payload, sort_order FROM catalogue_titles ORDER BY sort_order ASC, updated_at DESC',
       );
       for (const row of titles.rows) {
-        const title = row.payload;
-        const existingIndex = this.titles.findIndex((t) => t.id === title.id);
-        if (existingIndex >= 0) this.titles[existingIndex] = title;
-        else this.titles.unshift(title);
-
-        const spotlight = this.collections.find((c) => c.id === 'editors');
-        if (spotlight && !spotlight.titleIds.includes(title.id)) {
-          spotlight.titleIds.unshift(title.id);
-        }
+        this.applyPersistedTitle(row.payload);
       }
 
       const chapters = await this.db.query<{
@@ -112,7 +112,52 @@ export class CatalogueStore implements OnModuleInit {
     }
   }
 
+  private applyPersistedTitle(title: TitleDto) {
+    const existingIndex = this.titles.findIndex((t) => t.id === title.id);
+    if (existingIndex >= 0) this.titles[existingIndex] = title;
+    else this.titles.unshift(title);
+
+    const spotlight = this.collections.find((c) => c.id === 'editors');
+    if (spotlight && !spotlight.titleIds.includes(title.id)) {
+      spotlight.titleIds.unshift(title.id);
+    }
+  }
+
+  private async loadFromFirestore() {
+    try {
+      const titles = await this.fs.list<{
+        payload: TitleDto;
+        sortOrder?: number;
+        chapters?: ChapterDto[];
+        tracks?: AudioTrackDto[];
+      }>('catalogue_titles');
+      titles.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+      for (const row of titles) {
+        if (!row.payload) continue;
+        this.applyPersistedTitle(row.payload);
+        if (row.chapters) this.chaptersByTitle[row.payload.id] = row.chapters;
+        if (row.tracks) this.tracksByTitle[row.payload.id] = row.tracks;
+      }
+      this.logger.log(`Loaded ${titles.length} persisted catalogue title(s) from Firestore`);
+    } catch (error) {
+      this.logger.warn(`Failed to load catalogue from Firestore: ${error}`);
+    }
+  }
+
   private async persistTitle(title: TitleDto, sortOrder = 0) {
+    if (this.fs.enabled) {
+      try {
+        await this.fs.set('catalogue_titles', title.id, {
+          payload: title,
+          sortOrder,
+          chapters: this.chaptersByTitle[title.id] ?? [],
+          tracks: this.tracksByTitle[title.id] ?? [],
+        });
+      } catch (error) {
+        this.logger.warn(`Failed to persist catalogue title ${title.id} to Firestore: ${error}`);
+      }
+      return;
+    }
     if (!this.db.enabled) return;
     try {
       await this.db.query(
@@ -127,6 +172,11 @@ export class CatalogueStore implements OnModuleInit {
   }
 
   private async persistParts(titleId: string) {
+    if (this.fs.enabled) {
+      const title = this.titles.find((t) => t.id === titleId);
+      if (title) await this.persistTitle(title, 0);
+      return;
+    }
     if (!this.db.enabled) return;
     try {
       await this.db.query('DELETE FROM catalogue_chapters WHERE title_id = $1', [titleId]);
@@ -165,6 +215,14 @@ export class CatalogueStore implements OnModuleInit {
   }
 
   private async deletePersistedTitle(id: string) {
+    if (this.fs.enabled) {
+      try {
+        await this.fs.delete('catalogue_titles', id);
+      } catch (error) {
+        this.logger.warn(`Failed to delete catalogue title ${id} from Firestore: ${error}`);
+      }
+      return;
+    }
     if (!this.db.enabled) return;
     try {
       await this.db.query('DELETE FROM catalogue_chapters WHERE title_id = $1', [id]);
@@ -214,6 +272,18 @@ export class CatalogueStore implements OnModuleInit {
   getTracks(titleId: string): AudioTrackDto[] {
     this.getTitle(titleId);
     return this.tracksByTitle[titleId] ?? [];
+  }
+
+  findTitleIdByMediaId(mediaId: string): string | undefined {
+    if (!mediaId) return undefined;
+    const needle = `/v1/media/${mediaId}`;
+    for (const title of this.titles) {
+      if (title.mediaUrl?.includes(mediaId) || title.mediaUrl === needle) return title.id;
+      for (const track of this.tracksByTitle[title.id] ?? []) {
+        if (track.mediaUrl?.includes(mediaId) || track.mediaUrl === needle) return title.id;
+      }
+    }
+    return undefined;
   }
 
   /**

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
 import { DbService } from '../db/db.service';
+import { FirestoreService } from '../db/firestore.service';
 import { ContentNote, NoteAnchor, NoteKind } from './notes.types';
 
 @Injectable()
@@ -12,9 +13,23 @@ export class NotesStore implements OnModuleInit {
   private readonly dataFile = join(process.cwd(), '.data', 'notes.json');
   private notes: ContentNote[] = [];
 
-  constructor(@Inject(DbService) private readonly db: DbService) {}
+  constructor(
+    @Inject(DbService) private readonly db: DbService,
+    @Inject(FirestoreService) private readonly fs: FirestoreService,
+  ) {}
 
   async onModuleInit() {
+    if (this.fs.enabled) {
+      await this.loadFromFirestore();
+      if (this.notes.length === 0) {
+        this.loadFromDisk();
+        if (this.notes.length > 0) {
+          await this.persistAllToFirestore();
+          this.logger.log(`Migrated ${this.notes.length} note(s) disk → Firestore`);
+        }
+      }
+      return;
+    }
     if (this.db.enabled) {
       await this.loadFromDb();
       if (this.notes.length === 0) {
@@ -39,6 +54,19 @@ export class NotesStore implements OnModuleInit {
       }
     } catch (error) {
       this.logger.warn(`Failed to load notes: ${error}`);
+    }
+  }
+
+  private async loadFromFirestore() {
+    try {
+      const rows = await this.fs.list<{ payload?: ContentNote } & Partial<ContentNote>>('notes');
+      this.notes = rows
+        .map((row) => row.payload ?? (row as unknown as ContentNote))
+        .filter((n) => n?.id)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      this.logger.log(`Loaded ${this.notes.length} note(s) from Firestore`);
+    } catch (error) {
+      this.logger.warn(`Failed to load notes from Firestore: ${error}`);
     }
   }
 
@@ -90,6 +118,14 @@ export class NotesStore implements OnModuleInit {
     }
   }
 
+  private async upsertNoteFs(note: ContentNote) {
+    await this.fs.set('notes', note.id, { payload: note, ...note });
+  }
+
+  private async persistAllToFirestore() {
+    for (const note of this.notes) await this.upsertNoteFs(note);
+  }
+
   private async upsertNote(note: ContentNote) {
     await this.db.query(
       `INSERT INTO notes (
@@ -129,6 +165,12 @@ export class NotesStore implements OnModuleInit {
   }
 
   private persistNote(note: ContentNote) {
+    if (this.fs.enabled) {
+      void this.upsertNoteFs(note).catch((error) =>
+        this.logger.warn(`Failed to persist note to Firestore: ${error}`),
+      );
+      return;
+    }
     if (this.db.enabled) {
       void this.upsertNote(note).catch((error) =>
         this.logger.warn(`Failed to persist note to Postgres: ${error}`),
@@ -139,6 +181,12 @@ export class NotesStore implements OnModuleInit {
   }
 
   private persistDelete(id: string) {
+    if (this.fs.enabled) {
+      void this.fs
+        .delete('notes', id)
+        .catch((error) => this.logger.warn(`Failed to delete note in Firestore: ${error}`));
+      return;
+    }
     if (this.db.enabled) {
       void this.db
         .query('DELETE FROM notes WHERE id = $1', [id])

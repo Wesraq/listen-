@@ -3,17 +3,35 @@ import { Pool, type QueryResultRow } from 'pg';
 
 import { SCHEMA_SQL } from './schema';
 
+export type DataBackend = 'firestore' | 'postgres' | 'disk';
+
 @Injectable()
 export class DbService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DbService.name);
   private pool: Pool | null = null;
   private ready = false;
 
+  /** Resolved at boot from DATA_BACKEND (default postgres for local, firestore for shared tests). */
+  get backendPreference(): DataBackend {
+    const raw = (process.env.DATA_BACKEND ?? 'postgres').toLowerCase();
+    if (raw === 'firestore' || raw === 'postgres' || raw === 'disk') return raw;
+    return 'postgres';
+  }
+
   get enabled() {
     return this.ready && this.pool != null;
   }
 
   async onModuleInit() {
+    if (this.backendPreference === 'firestore') {
+      this.logger.log('DATA_BACKEND=firestore — skipping local PostgreSQL.');
+      return;
+    }
+    if (this.backendPreference === 'disk') {
+      this.logger.log('DATA_BACKEND=disk — using JSON file fallbacks only.');
+      return;
+    }
+
     const url = process.env.DATABASE_URL?.trim();
     if (!url) {
       this.logger.warn('DATABASE_URL not set — API will use in-memory / JSON fallbacks.');

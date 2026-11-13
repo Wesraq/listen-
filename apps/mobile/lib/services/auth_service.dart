@@ -26,6 +26,9 @@ abstract class AuthService {
   AuthUser? get currentUser;
   Stream<AuthUser?> authStateChanges();
 
+  /// Firebase ID token for API Bearer auth, or null when unavailable.
+  Future<String?> idToken({bool forceRefresh = false});
+
   Future<AuthUser> createAccount({
     required String email,
     required String password,
@@ -51,6 +54,9 @@ class NoopAuthService implements AuthService {
 
   @override
   Stream<AuthUser?> authStateChanges() => Stream<AuthUser?>.value(null);
+
+  @override
+  Future<String?> idToken({bool forceRefresh = false}) async => null;
 
   @override
   Future<AuthUser> createAccount({
@@ -101,6 +107,18 @@ class FirebaseAuthService implements AuthService {
   Stream<AuthUser?> authStateChanges() {
     if (!isAvailable) return Stream<AuthUser?>.value(null);
     return _auth.authStateChanges().map(_map);
+  }
+
+  @override
+  Future<String?> idToken({bool forceRefresh = false}) async {
+    if (!isAvailable) return null;
+    final user = _auth.currentUser;
+    if (user == null) return null;
+    try {
+      return await user.getIdToken(forceRefresh);
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

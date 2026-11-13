@@ -1,6 +1,7 @@
+.env
+service-account.json
+.secrets/
+.data/
 node_modules/
 dist/
-.data/
-*.log
-.DS_Store
-.env
+*firebase-adminsdk*.json

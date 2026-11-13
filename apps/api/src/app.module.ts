@@ -11,6 +11,7 @@ import { LibraryModule } from './library/library.module';
 import { MeModule } from './me/me.module';
 import { MediaModule } from './media/media.module';
 import { NotesModule } from './notes/notes.module';
+import { PaymentsModule } from './payments/payments.module';
 import { StudioModule } from './studio/studio.module';
 
 @Module({
@@ -27,6 +28,7 @@ import { StudioModule } from './studio/studio.module';
     AdsModule,
     ConsumptionModule,
     MediaModule,
+    PaymentsModule,
   ],
 })
 export class AppModule {}

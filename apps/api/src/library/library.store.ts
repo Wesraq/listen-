@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
 import { DbService } from '../db/db.service';
+import { FirestoreService } from '../db/firestore.service';
 
 interface LibraryRecord {
   owned: Set<string>;
@@ -19,9 +20,23 @@ export class LibraryStore implements OnModuleInit {
   private readonly dataFile = join(process.cwd(), '.data', 'library.json');
   private readonly byUser = new Map<string, LibraryRecord>();
 
-  constructor(@Inject(DbService) private readonly db: DbService) {}
+  constructor(
+    @Inject(DbService) private readonly db: DbService,
+    @Inject(FirestoreService) private readonly fs: FirestoreService,
+  ) {}
 
   async onModuleInit() {
+    if (this.fs.enabled) {
+      await this.loadFromFirestore();
+      if (this.byUser.size === 0) {
+        this.loadFromDisk();
+        if (this.byUser.size > 0) {
+          await this.persistAllToFirestore();
+          this.logger.log(`Migrated ${this.byUser.size} library user(s) disk → Firestore`);
+        }
+      }
+      return;
+    }
     if (this.db.enabled) {
       await this.loadFromDb();
       if (this.byUser.size === 0) {
@@ -50,6 +65,21 @@ export class LibraryStore implements OnModuleInit {
       this.logger.log(`Loaded library entitlements for ${this.byUser.size} user(s) from disk`);
     } catch (error) {
       this.logger.warn(`Failed to load library store: ${error}`);
+    }
+  }
+
+  private async loadFromFirestore() {
+    try {
+      const rows = await this.fs.list<{ owned?: string[]; saved?: string[] }>('library_users');
+      for (const row of rows) {
+        this.byUser.set(row.id, {
+          owned: new Set(row.owned ?? []),
+          saved: new Set(row.saved ?? []),
+        });
+      }
+      this.logger.log(`Loaded library entitlements for ${this.byUser.size} user(s) from Firestore`);
+    } catch (error) {
+      this.logger.warn(`Failed to load library from Firestore: ${error}`);
     }
   }
 
@@ -87,6 +117,20 @@ export class LibraryStore implements OnModuleInit {
     }
   }
 
+  private async persistUserToFirestore(uid: string) {
+    const entry = this.record(uid);
+    await this.fs.set('library_users', uid, {
+      owned: [...entry.owned],
+      saved: [...entry.saved],
+    });
+  }
+
+  private async persistAllToFirestore() {
+    for (const uid of this.byUser.keys()) {
+      await this.persistUserToFirestore(uid);
+    }
+  }
+
   private async persistAllToDb() {
     await this.db.query('DELETE FROM library_entries');
     for (const [uid, entry] of this.byUser.entries()) {
@@ -107,7 +151,19 @@ export class LibraryStore implements OnModuleInit {
     }
   }
 
-  private persist() {
+  private persist(uid?: string) {
+    if (this.fs.enabled) {
+      if (uid) {
+        void this.persistUserToFirestore(uid).catch((error) =>
+          this.logger.warn(`Failed to persist library user to Firestore: ${error}`),
+        );
+      } else {
+        void this.persistAllToFirestore().catch((error) =>
+          this.logger.warn(`Failed to persist library to Firestore: ${error}`),
+        );
+      }
+      return;
+    }
     if (this.db.enabled) {
       void this.persistAllToDb().catch((error) =>
         this.logger.warn(`Failed to persist library to Postgres: ${error}`),
@@ -144,11 +200,10 @@ export class LibraryStore implements OnModuleInit {
 
   grantOwnership(uid: string, titleId: string): string[] {
     this.record(uid).owned.add(titleId);
-    this.persist();
+    this.persist(uid);
     return this.getOwned(uid);
   }
 
-  /** Move entitlements when a seed/demo uid is rebound to a live Firebase uid. */
   rebindUid(fromUid: string, toUid: string): void {
     if (!fromUid || !toUid || fromUid === toUid) return;
     const from = this.byUser.get(fromUid);
@@ -157,6 +212,13 @@ export class LibraryStore implements OnModuleInit {
     for (const id of from.owned) to.owned.add(id);
     for (const id of from.saved) to.saved.add(id);
     this.byUser.delete(fromUid);
+    if (this.fs.enabled) {
+      void this.fs.delete('library_users', fromUid).catch(() => undefined);
+      void this.persistUserToFirestore(toUid).catch((error) =>
+        this.logger.warn(`Failed to persist rebound library user: ${error}`),
+      );
+      return;
+    }
     this.persist();
   }
 
@@ -164,11 +226,11 @@ export class LibraryStore implements OnModuleInit {
     const entry = this.record(uid);
     if (entry.saved.has(titleId)) {
       entry.saved.delete(titleId);
-      this.persist();
+      this.persist(uid);
       return { saved: [...entry.saved], isSaved: false };
     }
     entry.saved.add(titleId);
-    this.persist();
+    this.persist(uid);
     return { saved: [...entry.saved], isSaved: true };
   }
 }

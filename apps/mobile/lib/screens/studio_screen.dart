@@ -387,11 +387,11 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                           child: _ContentCard(
                             draft: left,
                             marketCurrency: session.currencyCode,
-                            onOpen: () async {
-                              final draft = await session.draftForEdit(left);
-                              if (!context.mounted) return;
-                              await showStudioUploadFlow(context, session, existing: draft);
-                            },
+                            onOpen: () => showStudioUploadFlow(
+                              context,
+                              session,
+                              existing: left,
+                            ),
                             onParts: () async {
                               final draft = await session.draftForEdit(left);
                               if (!context.mounted) return;
@@ -409,11 +409,11 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                               : _ContentCard(
                                   draft: right,
                                   marketCurrency: session.currencyCode,
-                                  onOpen: () async {
-                                    final draft = await session.draftForEdit(right);
-                                    if (!context.mounted) return;
-                                    await showStudioUploadFlow(context, session, existing: draft);
-                                  },
+                                  onOpen: () => showStudioUploadFlow(
+                                    context,
+                                    session,
+                                    existing: right,
+                                  ),
                                   onParts: () async {
                                     final draft = await session.draftForEdit(right);
                                     if (!context.mounted) return;

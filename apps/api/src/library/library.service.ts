@@ -26,15 +26,13 @@ export class LibraryService {
 
   entitlement(uid: string, titleId: string) {
     const title = this.catalogue.getTitle(titleId);
-    const entitled = this.store.isEntitled(uid, titleId, title.priceMinor === 0);
+    const isFree =
+      title.priceMinor === 0 || title.monetisationMode === 'free_with_ads';
+    const entitled = this.store.isEntitled(uid, titleId, isFree);
     return {
       titleId,
       entitled,
-      reason: entitled
-        ? title.priceMinor === 0
-          ? 'free'
-          : 'owned'
-        : 'not_owned',
+      reason: entitled ? (isFree ? 'free' : 'owned') : 'not_owned',
     };
   }
 

@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import '../data/catalogue.dart';
 import '../data/content_models.dart';
 import 'api_config.dart';
+import 'api_discovery.dart';
+import 'api_headers.dart';
 
 class LibraryRemote {
   const LibraryRemote({
@@ -33,21 +35,49 @@ class ProfileRemote {
   final String role;
 }
 
-class ListenApiClient {
-  ListenApiClient({http.Client? client, String? baseUrl})
-      : _client = client ?? http.Client(),
-        _baseUrl = baseUrl ?? ApiConfig.baseUrl;
+class _TunnelAwareClient extends http.BaseClient {
+  _TunnelAwareClient(this._inner);
+  final http.Client _inner;
 
-  final http.Client _client;
-  final String _baseUrl;
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    final headers = tunnelAwareHeaders(Map<String, String>.from(request.headers));
+    request.headers.clear();
+    request.headers.addAll(headers);
+    return _inner.send(request);
+  }
+}
+
+class ListenApiClient {
+  ListenApiClient({http.Client? client, String? baseUrl, ApiDiscovery? discovery})
+      : _inner = client ?? http.Client(),
+        _baseUrl = baseUrl ?? ApiConfig.baseUrl {
+    _client = _TunnelAwareClient(_inner);
+    _discovery = discovery ?? ApiDiscovery(client: _client);
+  }
+
+  final http.Client _inner;
+  late final http.Client _client;
+  late final ApiDiscovery _discovery;
+  String _baseUrl;
+
+  String get baseUrl => _baseUrl;
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final normalized = path.startsWith('/') ? path : '/$path';
     return Uri.parse('$_baseUrl$normalized').replace(queryParameters: query);
   }
 
+  /// Probe LAN candidates and pin the first healthy `/v1` base URL.
+  Future<String> ensureBaseUrl({bool force = false}) async {
+    final resolved = await _discovery.ensureResolved(force: force);
+    _baseUrl = resolved;
+    return resolved;
+  }
+
   Future<bool> health() async {
     try {
+      await ensureBaseUrl();
       final response = await _client.get(_uri('/health')).timeout(const Duration(seconds: 3));
       return response.statusCode == 200;
     } catch (_) {
@@ -113,6 +143,36 @@ class ListenApiClient {
       return LibraryRemote(ownedIds: owned, savedIds: saved);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Simulated checkout: create intent then confirm (server grants entitlement).
+  Future<bool> purchaseTitle(String bearerToken, String titleId) async {
+    try {
+      final create = await _client
+          .post(
+            _uri('/payments/intents'),
+            headers: {
+              'Authorization': 'Bearer $bearerToken',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'titleId': titleId}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (create.statusCode < 200 || create.statusCode >= 300) return false;
+      final decoded = jsonDecode(create.body);
+      if (decoded is! Map) return false;
+      final intentId = decoded['id'];
+      if (intentId == null) return false;
+      final confirm = await _client
+          .post(
+            _uri('/payments/intents/$intentId/confirm'),
+            headers: {'Authorization': 'Bearer $bearerToken'},
+          )
+          .timeout(const Duration(seconds: 8));
+      return confirm.statusCode >= 200 && confirm.statusCode < 300;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -305,6 +365,37 @@ class ListenApiClient {
     final origin = _baseUrl.replaceFirst(RegExp(r'/v1/?$'), '');
     if (relativeOrAbsolute.startsWith('/')) return '$origin$relativeOrAbsolute';
     return '$origin/$relativeOrAbsolute';
+  }
+
+  String? mediaIdFromUrl(String? mediaUrl) {
+    if (mediaUrl == null || mediaUrl.isEmpty) return null;
+    const marker = '/media/';
+    final index = mediaUrl.indexOf(marker);
+    if (index < 0) return null;
+    final id = mediaUrl.substring(index + marker.length).split('?').first;
+    return id.isEmpty ? null : id;
+  }
+
+  /// Mint a short-lived signed media URL (required on Cloud Run).
+  Future<String?> signedMediaUrl(String bearerToken, String mediaIdOrUrl) async {
+    final id = mediaIdFromUrl(mediaIdOrUrl) ?? mediaIdOrUrl;
+    if (id.isEmpty) return null;
+    try {
+      final response = await _client
+          .post(
+            _uri('/media/$id/sign'),
+            headers: {'Authorization': 'Bearer $bearerToken'},
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return null;
+      final url = decoded['url'];
+      if (url is! String || url.isEmpty) return null;
+      return absoluteMediaUrl(url);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<String?> uploadMedia(

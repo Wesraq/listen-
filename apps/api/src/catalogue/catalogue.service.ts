@@ -42,6 +42,11 @@ export class CatalogueService {
     return this.store.getTracks(titleId);
   }
 
+  /** Resolve which catalogue title owns a media object id (from `/v1/media/{id}`). */
+  findTitleIdByMediaId(mediaId: string): string | undefined {
+    return this.store.findTitleIdByMediaId(mediaId);
+  }
+
   publishCreatorTitle(input: {
     draftId: string;
     title: string;

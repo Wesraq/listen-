@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -19,10 +20,10 @@ Future<void> showStudioUploadFlow(
   SessionState session, {
   CreatorDraft? existing,
 }) async {
-  CreatorDraft? resolved = existing;
+  // Open immediately with the local draft. Missing parts hydrate in the
+  // background so tapping a title no longer waits on a full Studio API sync.
   if (existing != null) {
-    resolved = await session.draftForEdit(existing);
-    if (!context.mounted) return;
+    unawaited(session.draftForEdit(existing));
   }
   await showModalBottomSheet<void>(
     context: context,
@@ -32,7 +33,7 @@ Future<void> showStudioUploadFlow(
     builder: (context) {
       return Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-        child: _StudioUploadShell(session: session, existing: resolved),
+        child: _StudioUploadShell(session: session, existing: existing),
       );
     },
   );

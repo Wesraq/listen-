@@ -1,8 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { createReadStream, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
+
+import { getFirebaseAdmin } from '../firebase/firebase-admin';
+import { FirestoreService } from '../db/firestore.service';
 
 export interface MediaMeta {
   id: string;
@@ -11,17 +14,49 @@ export interface MediaMeta {
   bytes: number;
   createdAt: string;
   creatorUid?: string;
+  /** Firebase Storage object path when stored in the cloud. */
+  storagePath?: string;
 }
 
+/**
+ * Media bytes live in Firebase Storage when DATA_BACKEND=firestore (or
+ * MEDIA_BACKEND=firebase). Metadata is kept in Firestore `listen_media`.
+ * Falls back to local `.data/media` for pure LAN/disk mode.
+ */
 @Injectable()
-export class MediaStore {
+export class MediaStore implements OnModuleInit {
+  private readonly logger = new Logger(MediaStore.name);
   private readonly root = join(process.cwd(), '.data', 'media');
   private readonly indexPath = join(this.root, 'index.json');
   private readonly items = new Map<string, MediaMeta>();
+  private storageBucket: string | null = null;
+  private useCloud = false;
 
-  constructor() {
+  constructor(@Inject(FirestoreService) private readonly fs: FirestoreService) {
     mkdirSync(this.root, { recursive: true });
     this.load();
+  }
+
+  async onModuleInit() {
+    const backend = (process.env.MEDIA_BACKEND ?? process.env.DATA_BACKEND ?? 'disk').toLowerCase();
+    this.useCloud = backend === 'firestore' || backend === 'firebase';
+    this.storageBucket =
+      process.env.FIREBASE_STORAGE_BUCKET?.trim() ||
+      (process.env.FIREBASE_PROJECT_ID
+        ? `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app`
+        : null);
+
+    if (this.useCloud && this.fs.enabled) {
+      await this.loadFromFirestore();
+      this.logger.log(
+        `Media store using Firebase Storage bucket=${this.storageBucket} (${this.items.size} object(s))`,
+      );
+    } else if (this.useCloud) {
+      this.logger.warn(
+        'MEDIA cloud mode requested but Firestore is offline — media will use local disk fallback.',
+      );
+      this.useCloud = false;
+    }
   }
 
   private load() {
@@ -34,16 +69,41 @@ export class MediaStore {
     }
   }
 
-  private persist() {
+  private persistDiskIndex() {
     writeFileSync(this.indexPath, JSON.stringify([...this.items.values()], null, 2), 'utf8');
   }
 
-  save(input: {
+  private async loadFromFirestore() {
+    try {
+      const rows = await this.fs.list<{ payload?: MediaMeta } & Partial<MediaMeta>>('media');
+      for (const row of rows) {
+        const meta = (row.payload ?? row) as MediaMeta;
+        if (meta?.id) this.items.set(meta.id, meta);
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to load media index from Firestore: ${error}`);
+    }
+  }
+
+  private async persistMeta(meta: MediaMeta) {
+    this.items.set(meta.id, meta);
+    if (this.useCloud && this.fs.enabled) {
+      try {
+        await this.fs.set('media', meta.id, { payload: meta, ...meta });
+        return;
+      } catch (error) {
+        this.logger.warn(`Failed to persist media meta to Firestore: ${error}`);
+      }
+    }
+    this.persistDiskIndex();
+  }
+
+  async save(input: {
     buffer: Buffer;
     originalName: string;
     mimeType?: string;
     creatorUid?: string;
-  }): MediaMeta {
+  }): Promise<MediaMeta> {
     const id = `media-${randomUUID()}`;
     const meta: MediaMeta = {
       id,
@@ -53,9 +113,30 @@ export class MediaStore {
       createdAt: new Date().toISOString(),
       creatorUid: input.creatorUid,
     };
+
+    if (this.useCloud && this.storageBucket) {
+      const admin = await getFirebaseAdmin();
+      if (!admin) throw new Error('Firebase Admin unavailable for media upload');
+      const path = `media/${id}/${meta.originalName.replace(/[^\w.\-]+/g, '_')}`;
+      const bucket = admin.storage().bucket(this.storageBucket);
+      const file = bucket.file(path);
+      await file.save(input.buffer, {
+        contentType: meta.mimeType,
+        resumable: false,
+        metadata: {
+          metadata: {
+            creatorUid: input.creatorUid || '',
+            originalName: meta.originalName,
+          },
+        },
+      });
+      meta.storagePath = path;
+      await this.persistMeta(meta);
+      return meta;
+    }
+
     writeFileSync(join(this.root, id), input.buffer);
-    this.items.set(id, meta);
-    this.persist();
+    await this.persistMeta(meta);
     return meta;
   }
 
@@ -65,8 +146,20 @@ export class MediaStore {
     return meta;
   }
 
-  open(id: string): { meta: MediaMeta; stream: Readable; absolutePath: string } {
+  async open(
+    id: string,
+  ): Promise<{ meta: MediaMeta; stream: Readable; absolutePath?: string }> {
     const meta = this.getMeta(id);
+
+    if (meta.storagePath && this.storageBucket) {
+      const admin = await getFirebaseAdmin();
+      if (!admin) throw new NotFoundException(`Media ${id} unavailable (no Firebase Admin)`);
+      const file = admin.storage().bucket(this.storageBucket).file(meta.storagePath);
+      const [exists] = await file.exists();
+      if (!exists) throw new NotFoundException(`Media file ${id} missing in Storage`);
+      return { meta, stream: file.createReadStream() };
+    }
+
     const absolutePath = join(this.root, id);
     if (!existsSync(absolutePath)) {
       throw new NotFoundException(`Media file ${id} missing on disk`);

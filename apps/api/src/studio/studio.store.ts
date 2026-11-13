@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
 import { DbService } from '../db/db.service';
+import { FirestoreService } from '../db/firestore.service';
 import {
   PriceByCurrency,
   SaleRow,
@@ -23,9 +24,25 @@ export class StudioStore implements OnModuleInit {
   private drafts: StudioDraft[] = [];
   private sales: SaleRow[] = [];
 
-  constructor(@Inject(DbService) private readonly db: DbService) {}
+  constructor(
+    @Inject(DbService) private readonly db: DbService,
+    @Inject(FirestoreService) private readonly fs: FirestoreService,
+  ) {}
 
   async onModuleInit() {
+    if (this.fs.enabled) {
+      await this.loadFromFirestore();
+      if (this.drafts.length === 0 && this.sales.length === 0) {
+        this.loadFromDisk();
+        if (this.drafts.length > 0 || this.sales.length > 0) {
+          await this.persistAllToFirestore();
+          this.logger.log(
+            `Migrated ${this.drafts.length} draft(s) and ${this.sales.length} sale(s) disk → Firestore`,
+          );
+        }
+      }
+      return;
+    }
     if (this.db.enabled) {
       await this.loadFromDb();
       if (this.drafts.length === 0 && this.sales.length === 0) {
@@ -62,6 +79,29 @@ export class StudioStore implements OnModuleInit {
       }
     } catch (error) {
       this.logger.warn(`Failed to load studio sales: ${error}`);
+    }
+  }
+
+  private async loadFromFirestore() {
+    try {
+      const drafts = await this.fs.list<{ payload: StudioDraft }>('studio_drafts');
+      this.drafts = drafts
+        .map((row) => row.payload)
+        .filter(Boolean)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      this.logger.log(`Loaded ${this.drafts.length} studio draft(s) from Firestore`);
+    } catch (error) {
+      this.logger.warn(`Failed to load studio drafts from Firestore: ${error}`);
+    }
+    try {
+      const sales = await this.fs.list<{ payload: SaleRow }>('studio_sales');
+      this.sales = sales
+        .map((row) => row.payload)
+        .filter(Boolean)
+        .sort((a, b) => (a.at < b.at ? 1 : -1));
+      this.logger.log(`Loaded ${this.sales.length} sale row(s) from Firestore`);
+    } catch (error) {
+      this.logger.warn(`Failed to load studio sales from Firestore: ${error}`);
     }
   }
 
@@ -104,6 +144,19 @@ export class StudioStore implements OnModuleInit {
     }
   }
 
+  private async upsertDraftFs(draft: StudioDraft) {
+    await this.fs.set('studio_drafts', draft.id, { payload: draft });
+  }
+
+  private async upsertSaleFs(sale: SaleRow) {
+    await this.fs.set('studio_sales', sale.id, { payload: sale });
+  }
+
+  private async persistAllToFirestore() {
+    for (const draft of this.drafts) await this.upsertDraftFs(draft);
+    for (const sale of this.sales) await this.upsertSaleFs(sale);
+  }
+
   private async upsertDraft(draft: StudioDraft) {
     await this.db.query(
       `INSERT INTO studio_drafts (id, payload, updated_at)
@@ -128,6 +181,12 @@ export class StudioStore implements OnModuleInit {
   }
 
   private persist() {
+    if (this.fs.enabled) {
+      void Promise.all(this.drafts.map((d) => this.upsertDraftFs(d))).catch((error) =>
+        this.logger.warn(`Failed to persist studio drafts to Firestore: ${error}`),
+      );
+      return;
+    }
     if (this.db.enabled) {
       void Promise.all(this.drafts.map((d) => this.upsertDraft(d))).catch((error) =>
         this.logger.warn(`Failed to persist studio drafts to Postgres: ${error}`),
@@ -138,6 +197,12 @@ export class StudioStore implements OnModuleInit {
   }
 
   private persistDraft(draft: StudioDraft) {
+    if (this.fs.enabled) {
+      void this.upsertDraftFs(draft).catch((error) =>
+        this.logger.warn(`Failed to persist draft to Firestore: ${error}`),
+      );
+      return;
+    }
     if (this.db.enabled) {
       void this.upsertDraft(draft).catch((error) =>
         this.logger.warn(`Failed to persist draft to Postgres: ${error}`),
@@ -148,6 +213,12 @@ export class StudioStore implements OnModuleInit {
   }
 
   private persistDeleteDraft(id: string) {
+    if (this.fs.enabled) {
+      void this.fs
+        .delete('studio_drafts', id)
+        .catch((error) => this.logger.warn(`Failed to delete draft in Firestore: ${error}`));
+      return;
+    }
     if (this.db.enabled) {
       void this.db
         .query('DELETE FROM studio_drafts WHERE id = $1', [id])
@@ -158,6 +229,15 @@ export class StudioStore implements OnModuleInit {
   }
 
   private persistSales() {
+    if (this.fs.enabled) {
+      const latest = this.sales[0];
+      if (latest) {
+        void this.upsertSaleFs(latest).catch((error) =>
+          this.logger.warn(`Failed to persist sale to Firestore: ${error}`),
+        );
+      }
+      return;
+    }
     if (this.db.enabled) {
       const latest = this.sales[0];
       if (latest) {

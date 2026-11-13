@@ -223,6 +223,14 @@ class SessionState extends ChangeNotifier {
     return uid;
   }
 
+  /// Prefer Firebase ID token; fall back to local `uid|email|name` for hybrid AUTH_MODE.
+  Future<String?> _apiBearer({bool forceRefresh = false}) async {
+    if (!isSignedIn || uid == null || uid!.isEmpty) return null;
+    final idToken = await _auth.idToken(forceRefresh: forceRefresh);
+    if (idToken != null && idToken.isNotEmpty) return idToken;
+    return _devBearer();
+  }
+
   Future<void> _syncCatalogueFromApi() async {
     apiReachable = await _api.health();
     if (!apiReachable) {
@@ -434,7 +442,7 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> _syncLibraryFromApi() async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) {
       librarySyncedFromApi = false;
       return;
@@ -464,7 +472,7 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> _syncProfileFromApi() async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final profile = await _api.fetchMe(bearer);
     if (profile == null) return;
@@ -697,7 +705,7 @@ class SessionState extends ChangeNotifier {
     if (!saved.add(id)) saved.remove(id);
     notifyListeners();
     await _persist();
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final ok = await _api.toggleSaved(bearer, id);
     if (!ok) {
@@ -717,14 +725,16 @@ class SessionState extends ChangeNotifier {
     owned.add(id);
     notifyListeners();
     await _persist();
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) {
       _pendingOwnedSync.add(id);
       _ensureSyncRetry();
       showNotice('Added to your library. Sign in to sync across devices.');
       return;
     }
-    final ok = await _api.grantOwnership(bearer, id);
+    // Prefer payment intent + confirm so entitlements are server-verified.
+    final ok =
+        await _api.purchaseTitle(bearer, id) || await _api.grantOwnership(bearer, id);
     if (ok) {
       librarySyncedFromApi = true;
       _pendingOwnedSync.remove(id);
@@ -748,7 +758,7 @@ class SessionState extends ChangeNotifier {
     apiReachable = healthy;
     if (!healthy) return;
 
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) {
       if (_pendingOwnedSync.isEmpty && _pendingSavedSync.isEmpty && !_pendingDraftFlush) {
         _syncRetryTimer?.cancel();
@@ -759,7 +769,8 @@ class SessionState extends ChangeNotifier {
 
     var progressed = false;
     for (final id in [..._pendingOwnedSync]) {
-      final ok = await _api.grantOwnership(bearer, id);
+      final ok =
+          await _api.purchaseTitle(bearer, id) || await _api.grantOwnership(bearer, id);
       if (ok) {
         _pendingOwnedSync.remove(id);
         librarySyncedFromApi = true;
@@ -873,14 +884,14 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> _syncSalesFromApi() async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final remote = await _api.fetchSales(bearer);
     if (remote != null) sales = remote;
   }
 
   Future<void> _syncDraftsFromApi() async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final remote = await _api.fetchStudioDrafts(bearer);
     if (remote == null) return;
@@ -1020,9 +1031,9 @@ class SessionState extends ChangeNotifier {
     return id.isEmpty ? null : id;
   }
 
-  /// Latest draft snapshot for Studio edit, with catalogue parts filled in.
+  /// Local draft snapshot for Studio edit. Fills missing chapters/episodes for
+  /// this title only — does not re-sync the whole Studio list (that was slow).
   Future<CreatorDraft> draftForEdit(CreatorDraft draft) async {
-    await _syncDraftsFromApi();
     CreatorDraft? latest;
     for (final candidate in drafts) {
       if (candidate.id == draft.id ||
@@ -1034,21 +1045,63 @@ class SessionState extends ChangeNotifier {
       }
     }
     latest ??= draft;
-    final titleId = latest.publishedTitleId;
-    if (titleId != null &&
-        ((latest.isAudioFormat && latest.episodes.isEmpty) ||
-            (latest.isEbook && latest.chapters.isEmpty))) {
-      await refreshTitleParts(titleId, notify: false);
-      await _backfillDraftPartsFromCatalogue();
-      for (final candidate in drafts) {
-        if (candidate.id == latest.id) return candidate;
-      }
+
+    final titleId = latest.publishedTitleId?.trim();
+    final needsAudio = latest.isAudioFormat && latest.episodes.isEmpty;
+    final needsEbook = latest.isEbook && latest.chapters.isEmpty;
+    if (titleId == null || titleId.isEmpty || (!needsAudio && !needsEbook)) {
+      return latest;
     }
-    return latest;
+
+    await refreshTitleParts(titleId, notify: false);
+
+    final nextEpisodes = needsAudio
+        ? tracksFor(titleId)
+            .asMap()
+            .entries
+            .map(
+              (entry) => ContentEpisode(
+                id: entry.value.id,
+                title: entry.value.title,
+                durationSec: entry.value.durationSec,
+                sortOrder: entry.key,
+                mediaName: entry.value.mediaName,
+                mediaId: _mediaIdFromUrl(entry.value.mediaUrl),
+              ),
+            )
+            .toList()
+        : latest.episodes;
+    final nextChapters = needsEbook
+        ? chaptersFor(titleId)
+            .asMap()
+            .entries
+            .map(
+              (entry) => ContentChapter(
+                id: entry.value.id,
+                title: entry.value.title,
+                body: entry.value.body,
+                sortOrder: entry.key,
+              ),
+            )
+            .toList()
+        : latest.chapters;
+
+    if (nextEpisodes.isEmpty && nextChapters.isEmpty) return latest;
+
+    final filled = latest.copyWith(
+      episodes: nextEpisodes.isNotEmpty ? nextEpisodes : latest.episodes,
+      chapters: nextChapters.isNotEmpty ? nextChapters : latest.chapters,
+    );
+    final index = drafts.indexWhere((d) => d.id == latest!.id);
+    if (index >= 0) {
+      drafts[index] = filled;
+      await _persist();
+    }
+    return filled;
   }
 
   Future<void> _syncNotesFromApi() async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final remote = await _api.fetchNotes(bearer);
     if (remote.isEmpty) return;
@@ -1068,7 +1121,7 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<bool> applyAsCreator({required String displayName}) async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) {
       creatorState = CreatorApplicationState.pending;
       notifyListeners();
@@ -1126,52 +1179,10 @@ class SessionState extends ChangeNotifier {
     final nextChapters = chapters ?? existing?.chapters ?? const <ContentChapter>[];
     final nextEpisodes = episodes ?? existing?.episodes ?? const <ContentEpisode>[];
     final wantsSubmit = submit == true;
-    final localStatus = wantsSubmit
-        ? 'submitted'
-        : (existing?.status == 'live' ? 'live' : (submit == false ? 'draft' : (existing?.status ?? 'draft')));
-
-    var preparedEpisodes = nextEpisodes;
-    var preparedMediaId = existing?.mediaId;
-    final bearer = _devBearer();
-    if (bearer != null) {
-      // Upload any local audio that is not yet on the API before draft sync.
-      final uploaded = <ContentEpisode>[];
-      for (final episode in nextEpisodes) {
-        if ((episode.mediaId != null && episode.mediaId!.isNotEmpty) ||
-            episode.mediaPath == null ||
-            !File(episode.mediaPath!).existsSync()) {
-          uploaded.add(episode);
-          continue;
-        }
-        final id = await _api.uploadMedia(
-          bearer,
-          filePath: episode.mediaPath!,
-          filename: episode.mediaName,
-        );
-        uploaded.add(id == null ? episode : episode.copyWith(mediaId: id));
-      }
-      preparedEpisodes = uploaded;
-      if (mediaPath != null && File(mediaPath).existsSync()) {
-        final pathChanged = existing?.mediaPath != mediaPath;
-        if (preparedMediaId == null || preparedMediaId.isEmpty || pathChanged) {
-          preparedMediaId = await _api.uploadMedia(
-            bearer,
-            filePath: mediaPath,
-            filename: mediaName,
-          );
-        }
-      }
-      // Podcast/audiobook: also promote first episode media to draft root when needed.
-      if (preparedMediaId == null || preparedMediaId.isEmpty) {
-        for (final episode in preparedEpisodes) {
-          final id = episode.mediaId;
-          if (id != null && id.isNotEmpty) {
-            preparedMediaId = id;
-            break;
-          }
-        }
-      }
-    }
+    // Never claim "submitted" until the API confirms.
+    final localStatus = existing?.status == 'live'
+        ? 'live'
+        : (submit == false ? 'draft' : (existing?.status == 'submitted' ? 'draft' : (existing?.status ?? 'draft')));
 
     final local = CreatorDraft(
       id: existing?.id ?? 'local-${DateTime.now().millisecondsSinceEpoch}',
@@ -1190,185 +1201,215 @@ class SessionState extends ChangeNotifier {
       mediaPath: mediaPath,
       mediaKind: mediaKind,
       mediaBytes: mediaBytes,
-      mediaId: preparedMediaId,
+      mediaId: existing?.mediaId,
       coverImageName: coverImageName,
       coverImagePath: coverImagePath,
       coverImageBytes: coverImageBytes,
       chapters: nextChapters,
-      episodes: preparedEpisodes,
+      episodes: nextEpisodes,
       publishedTitleId: existing?.publishedTitleId,
     );
 
-    CreatorDraft saved = local.copyWith(
-      status: wantsSubmit ? 'draft' : local.status,
-    );
-    // Never mark as submitted unless the API confirms — otherwise admin never sees it.
+    // Persist locally first so Save Draft feels instant.
+    if (existingIndex >= 0) {
+      drafts[existingIndex] = local;
+    } else {
+      drafts.insert(0, local);
+    }
+    notifyListeners();
+    await _persist();
+
+    final bearer = await _apiBearer();
     if (bearer == null) {
-      if (existingIndex >= 0) {
-        drafts[existingIndex] = local.copyWith(status: 'draft');
-      } else {
-        drafts.insert(0, local.copyWith(status: 'draft'));
-      }
-      notifyListeners();
-      await _persist();
       _pendingDraftFlush = true;
       _ensureSyncRetry();
       showNotice(
         wantsSubmit
             ? 'Saved on this device. Sign in to submit for review.'
-            : 'Draft saved on this device.',
+            : 'Draft saved',
       );
-      return drafts.first;
+      return local;
+    }
+
+    // Fail fast if the API host is wrong/offline — don't wait on media uploads.
+    final healthy = await _api.health();
+    apiReachable = healthy;
+    if (!healthy) {
+      _pendingDraftFlush = true;
+      _ensureSyncRetry();
+      showNotice(
+        wantsSubmit
+            ? 'Saved on this device. Will submit when Listen+ is reachable.'
+            : 'Draft saved',
+      );
+      return local;
+    }
+
+    if (!wantsSubmit) {
+      showNotice(local.status == 'live' ? 'Saved' : 'Draft saved');
+      unawaited(_pushDraftToApi(local, wantsSubmit: false));
+      return local;
+    }
+
+    final remote = await _pushDraftToApi(local, wantsSubmit: true);
+    if (remote == null) {
+      _pendingDraftFlush = true;
+      _ensureSyncRetry();
+      showNotice('Saved on this device. Will submit when Listen+ is reachable.');
+      return local;
+    }
+    showNotice('Submitted for review. It appears on Home after approval.');
+    return remote;
+  }
+
+  Future<CreatorDraft?> _pushDraftToApi(
+    CreatorDraft draft, {
+    required bool wantsSubmit,
+  }) async {
+    final bearer = await _apiBearer();
+    if (bearer == null) return null;
+
+    var preparedEpisodes = draft.episodes;
+    var preparedMediaId = draft.mediaId;
+
+    final uploaded = <ContentEpisode>[];
+    for (final episode in draft.episodes) {
+      if ((episode.mediaId != null && episode.mediaId!.isNotEmpty) ||
+          episode.mediaPath == null ||
+          !File(episode.mediaPath!).existsSync()) {
+        uploaded.add(episode);
+        continue;
+      }
+      final id = await _api.uploadMedia(
+        bearer,
+        filePath: episode.mediaPath!,
+        filename: episode.mediaName,
+      );
+      uploaded.add(id == null ? episode : episode.copyWith(mediaId: id));
+    }
+    preparedEpisodes = uploaded;
+
+    final mediaPath = draft.mediaPath;
+    if (mediaPath != null && File(mediaPath).existsSync()) {
+      if (preparedMediaId == null || preparedMediaId.isEmpty) {
+        preparedMediaId = await _api.uploadMedia(
+          bearer,
+          filePath: mediaPath,
+          filename: draft.mediaName,
+        );
+      }
+    }
+    if (preparedMediaId == null || preparedMediaId.isEmpty) {
+      for (final episode in preparedEpisodes) {
+        final id = episode.mediaId;
+        if (id != null && id.isNotEmpty) {
+          preparedMediaId = id;
+          break;
+        }
+      }
     }
 
     final email = contact.trim().isEmpty ? null : contact.trim();
     final name = displayName.trim().isEmpty ? null : displayName.trim();
-    // null = keep current API status (important for live + part edits).
-    final bool? submitFlag = existing?.status == 'live'
+    final bool? submitFlag = draft.status == 'live'
         ? (wantsSubmit ? true : null)
-        : submit;
+        : (wantsSubmit ? true : false);
+
     CreatorDraft? remote;
-    if (existingId != null && !existingId.startsWith('local-')) {
+    if (!draft.id.startsWith('local-')) {
       remote = await _api.updateStudioDraft(
         bearer,
-        id: existingId,
-        title: title,
-        format: format,
-        prices: prices,
-        genre: local.genre,
-        monetisationMode: local.monetisationMode,
-        subscriptionEligible: local.subscriptionEligible,
-        mediaName: mediaName,
-        mediaKind: mediaKind,
-        mediaBytes: mediaBytes,
-        mediaId: local.mediaId,
-        coverImageName: coverImageName,
-        coverImageBytes: coverImageBytes,
-        chapters: nextChapters,
+        id: draft.id,
+        title: draft.title,
+        format: draft.format,
+        prices: draft.prices,
+        genre: draft.genre,
+        monetisationMode: draft.monetisationMode,
+        subscriptionEligible: draft.subscriptionEligible,
+        mediaName: draft.mediaName,
+        mediaKind: draft.mediaKind,
+        mediaBytes: draft.mediaBytes,
+        mediaId: preparedMediaId,
+        coverImageName: draft.coverImageName,
+        coverImageBytes: draft.coverImageBytes,
+        chapters: draft.chapters,
         episodes: preparedEpisodes,
         submit: submitFlag,
         email: email,
         displayName: name,
       );
-      // Stale draft ids (API restart before disk persist) → create a fresh API row.
-      remote ??= await _api.createStudioDraft(
-        bearer,
-        title: title,
-        format: format,
-        prices: prices,
-        genre: local.genre,
-        monetisationMode: local.monetisationMode,
-        subscriptionEligible: local.subscriptionEligible,
-        mediaName: mediaName,
-        mediaKind: mediaKind,
-        mediaBytes: mediaBytes,
-        mediaId: local.mediaId,
-        coverImageName: coverImageName,
-        coverImageBytes: coverImageBytes,
-        chapters: nextChapters,
-        episodes: preparedEpisodes,
-        submit: wantsSubmit,
-        email: email,
-        displayName: name,
-      );
-    } else {
-      remote = await _api.createStudioDraft(
-        bearer,
-        title: title,
-        format: format,
-        prices: prices,
-        genre: local.genre,
-        monetisationMode: local.monetisationMode,
-        subscriptionEligible: local.subscriptionEligible,
-        mediaName: mediaName,
-        mediaKind: mediaKind,
-        mediaBytes: mediaBytes,
-        mediaId: local.mediaId,
-        coverImageName: coverImageName,
-        coverImageBytes: coverImageBytes,
-        chapters: nextChapters,
-        episodes: preparedEpisodes,
-        submit: wantsSubmit,
-        email: email,
-        displayName: name,
-      );
     }
+    remote ??= await _api.createStudioDraft(
+      bearer,
+      title: draft.title,
+      format: draft.format,
+      prices: draft.prices,
+      genre: draft.genre,
+      monetisationMode: draft.monetisationMode,
+      subscriptionEligible: draft.subscriptionEligible,
+      mediaName: draft.mediaName,
+      mediaKind: draft.mediaKind,
+      mediaBytes: draft.mediaBytes,
+      mediaId: preparedMediaId,
+      coverImageName: draft.coverImageName,
+      coverImageBytes: draft.coverImageBytes,
+      chapters: draft.chapters,
+      episodes: preparedEpisodes,
+      submit: wantsSubmit,
+      email: email,
+      displayName: name,
+    );
+    if (remote == null) return null;
 
-    if (remote == null) {
-      final offline = local.copyWith(status: 'draft');
-      if (existingIndex >= 0) {
-        drafts[existingIndex] = offline;
-      } else {
-        drafts.insert(0, offline);
-      }
-      apiReachable = await _api.health();
-      notifyListeners();
-      await _persist();
-      _pendingDraftFlush = true;
-      _ensureSyncRetry();
-      showNotice(
-        wantsSubmit
-            ? 'Saved on this device. Will submit for review when Listen+ is reachable.'
-            : 'Draft saved on this device. Syncing when Listen+ is reachable…',
-      );
-      return offline;
-    }
-
-    saved = CreatorDraft(
+    final saved = CreatorDraft(
       id: remote.id,
       title: remote.title,
-      format: format,
-      genre: local.genre ?? remote.genre,
-      prices: prices,
-      monetisationMode: local.monetisationMode ?? remote.monetisationMode,
-      subscriptionEligible: local.subscriptionEligible,
+      format: draft.format,
+      genre: draft.genre ?? remote.genre,
+      prices: draft.prices,
+      monetisationMode: draft.monetisationMode ?? remote.monetisationMode,
+      subscriptionEligible: draft.subscriptionEligible,
       status: remote.status,
-      createdAtMs: existing?.createdAtMs ?? remote.createdAtMs,
-      mediaName: mediaName,
-      mediaPath: mediaPath,
-      mediaKind: mediaKind,
-      mediaBytes: mediaBytes,
-      mediaId: local.mediaId ?? remote.mediaId,
-      coverImageName: coverImageName ?? remote.coverImageName,
-      coverImagePath: coverImagePath,
-      coverImageBytes: coverImageBytes ?? remote.coverImageBytes,
-      chapters: remote.chapters.isNotEmpty ? remote.chapters : nextChapters,
+      createdAtMs: draft.createdAtMs,
+      mediaName: draft.mediaName,
+      mediaPath: draft.mediaPath,
+      mediaKind: draft.mediaKind,
+      mediaBytes: draft.mediaBytes,
+      mediaId: preparedMediaId ?? remote.mediaId,
+      coverImageName: draft.coverImageName ?? remote.coverImageName,
+      coverImagePath: draft.coverImagePath,
+      coverImageBytes: draft.coverImageBytes ?? remote.coverImageBytes,
+      chapters: remote.chapters.isNotEmpty ? remote.chapters : draft.chapters,
       episodes: _mergeEpisodeLocalPaths(
         remote.episodes.isNotEmpty ? remote.episodes : preparedEpisodes,
         preparedEpisodes,
       ),
-      publishedTitleId: remote.publishedTitleId ?? existing?.publishedTitleId,
+      publishedTitleId: remote.publishedTitleId ?? draft.publishedTitleId,
     );
 
-    if (existingIndex >= 0) {
-      drafts[existingIndex] = saved;
+    final index = drafts.indexWhere(
+      (d) => d.id == draft.id || (d.title == draft.title && d.id.startsWith('local-')),
+    );
+    if (index >= 0) {
+      drafts[index] = saved;
     } else {
-      // Drop any previous local-only copy of the same title.
-      drafts.removeWhere((d) => d.id.startsWith('local-') && d.title == saved.title);
       drafts.insert(0, saved);
     }
-    await _syncSalesFromApi();
-    await _syncDraftsFromApi();
+    drafts.removeWhere(
+      (d) => d.id.startsWith('local-') && d.id != saved.id && d.title == saved.title,
+    );
     overlayDraftParts(saved);
     if (saved.publishedTitleId != null) {
-      downloads.removeWhere((d) => d.titleId == saved.publishedTitleId);
-      await refreshTitleParts(saved.publishedTitleId!);
+      unawaited(refreshTitleParts(saved.publishedTitleId!, notify: false));
     }
     notifyListeners();
     await _persist();
-    showNotice(
-      saved.status == 'submitted'
-          ? 'Submitted for review. It appears on Home after approval.'
-          : saved.status == 'live'
-              ? 'Live on Listen+ · ${saved.priceSummary}'
-              : 'Draft saved · ${saved.priceSummary}',
-    );
     return saved;
   }
 
   Future<void> deleteCreatorDraft(String id) async {
     drafts.removeWhere((d) => d.id == id);
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer != null && !id.startsWith('local-')) {
       await _api.deleteStudioDraft(bearer, id);
     }
@@ -1416,7 +1457,7 @@ class SessionState extends ChangeNotifier {
 
   Future<void> addContentNote(ContentNote note) async {
     var saved = note;
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer != null) {
       final remote = await _api.createNote(bearer, note: note);
       if (remote != null) saved = remote;
@@ -1692,7 +1733,7 @@ class SessionState extends ChangeNotifier {
       }
     }
 
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (!skipped &&
         watched >= 5 &&
         title != null &&
@@ -1752,7 +1793,7 @@ class SessionState extends ChangeNotifier {
         title.resolvedMonetisationMode != 'purchase') {
       return;
     }
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final dayKey = '${title.id}:${DateTime.now().toIso8601String().substring(0, 10)}';
     final already = _readerMinutesCredited[dayKey] ?? 0;
@@ -1782,7 +1823,7 @@ class SessionState extends ChangeNotifier {
     if (_qualifiedListenAccumSec < 60) return;
     final minutes = (_qualifiedListenAccumSec / 60).floor();
     _qualifiedListenAccumSec -= minutes * 60;
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     if (bearer == null) return;
     final ok = await _api.creditQualifiedConsumption(
       bearer,
@@ -1907,8 +1948,12 @@ class SessionState extends ChangeNotifier {
       if (byName != null) return byName;
     }
 
-    final remote = title.mediaUrl;
+    var remote = title.mediaUrl;
     if (remote != null && remote.isNotEmpty && (title.isPdfEbook || preferPdf)) {
+      final bearer = await _apiBearer();
+      if (bearer != null) {
+        remote = await _api.signedMediaUrl(bearer, remote) ?? remote;
+      }
       final name = title.mediaName ?? '${title.id}.pdf';
       final cached = await _cacheRemoteEbookPdf(
         titleId: title.id,
@@ -2022,7 +2067,11 @@ class SessionState extends ChangeNotifier {
     _stopTicker();
 
     final localPath = await _mediaPathForPlayingTitle();
-    final mediaUrl = _mediaUrlForPlayingTitle();
+    var mediaUrl = _mediaUrlForPlayingTitle();
+    final bearer = await _apiBearer();
+    if (bearer != null && mediaUrl != null && mediaUrl.isNotEmpty) {
+      mediaUrl = await _api.signedMediaUrl(bearer, mediaUrl) ?? mediaUrl;
+    }
     final ok = await _audio.load(
       duration: Duration(seconds: nowPlayingTrack?.durationSec ?? 8),
       filePath: localPath,
@@ -2077,7 +2126,7 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> _ensurePlayingMediaUploaded(String localPath) async {
-    final bearer = _devBearer();
+    final bearer = await _apiBearer();
     final title = nowPlaying;
     final track = nowPlayingTrack;
     if (bearer == null || title == null) return;

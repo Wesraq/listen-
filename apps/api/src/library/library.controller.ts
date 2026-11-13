@@ -1,4 +1,12 @@
-import { Controller, Get, Inject, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Inject,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -20,9 +28,18 @@ export class LibraryController {
     return this.library.entitlement(user.uid, titleId);
   }
 
-  /** Prototype grant — real purchases must come from verified payment webhooks. */
+  /**
+   * Legacy client grant. Prefer POST /payments/intents + confirm/webhook.
+   * Disabled when ALLOW_CLIENT_GRANTS=false.
+   */
   @Post('owned/:titleId')
   grant(@CurrentUser() user: AuthUser, @Param('titleId') titleId: string) {
+    const allow = (process.env.ALLOW_CLIENT_GRANTS ?? 'false').toLowerCase() === 'true';
+    if (!allow) {
+      throw new ForbiddenException(
+        'Client grants disabled. Create a payment intent and confirm via /payments.',
+      );
+    }
     return this.library.grant(user.uid, titleId);
   }
 
