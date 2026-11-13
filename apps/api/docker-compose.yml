@@ -1,0 +1,15 @@
+# Optional local Postgres for the next persistence slice.
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: listen
+      POSTGRES_PASSWORD: listen
+      POSTGRES_DB: listenplus
+    volumes:
+      - listen_pg:/var/lib/postgresql/data
+
+volumes:
+  listen_pg:

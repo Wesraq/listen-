@@ -1,0 +1,14 @@
+Listen+ sample ebook
+A short stand-in for EPUB upload on the simulator.
+
+Chapter 1
+The jacarandas lean over the Kafue and the afternoon slows.
+Fishermen pull nets while the river keeps its own quiet rhythm.
+
+Chapter 2
+Night settles on Lusaka rooftops and radios murmur football scores.
+Someone reads aloud so the whole courtyard can listen together.
+
+Chapter 3
+By morning the market is already loud with tomatoes, stories, and song.
+This chapter exists so Listen+ can demonstrate automatic chapter detection.
