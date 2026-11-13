@@ -107,6 +107,7 @@ class SessionSnapshot {
     required this.saved,
     required this.creatorState,
     required this.drafts,
+    this.accountUid,
     this.progress = const {},
     this.readerPrefs = const ReaderPrefs(),
     this.playbackSpeed = 1,
@@ -114,6 +115,8 @@ class SessionSnapshot {
     this.downloads = const [],
   });
 
+  /// Firebase uid when signed in; null/empty for guest blobs.
+  final String? accountUid;
   final bool onboardingComplete;
   final bool isSignedIn;
   final String displayName;
@@ -135,6 +138,7 @@ class SessionSnapshot {
   final List<OfflineDownload> downloads;
 
   Map<String, dynamic> toJson() => {
+        'accountUid': accountUid,
         'onboardingComplete': onboardingComplete,
         'isSignedIn': isSignedIn,
         'displayName': displayName,
@@ -172,7 +176,9 @@ class SessionSnapshot {
       });
     }
 
+    final accountUid = json['accountUid'] == null ? null : '${json['accountUid']}';
     return SessionSnapshot(
+      accountUid: (accountUid == null || accountUid.isEmpty) ? null : accountUid,
       onboardingComplete: json['onboardingComplete'] == true,
       isSignedIn: json['isSignedIn'] == true,
       displayName: '${json['displayName'] ?? ''}',
@@ -239,11 +245,31 @@ class SessionSnapshot {
 }
 
 class SessionStore {
-  static const _key = 'listen_plus.session.v1';
+  static const legacyKey = 'listen_plus.session.v1';
 
-  Future<SessionSnapshot?> load() async {
+  static String keyFor(String? accountKey) {
+    final id = (accountKey == null || accountKey.isEmpty) ? 'guest' : accountKey;
+    return '$legacyKey.$id';
+  }
+
+  Future<SessionSnapshot?> load({String? accountKey}) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
+    final key = keyFor(accountKey);
+    var raw = prefs.getString(key);
+
+    // One-time migration: old shared blob → guest (or current) account key.
+    if ((raw == null || raw.isEmpty) && prefs.containsKey(legacyKey)) {
+      raw = prefs.getString(legacyKey);
+      if (raw != null && raw.isNotEmpty) {
+        await prefs.setString(key, raw);
+        // Only remove legacy after migrating into guest to avoid losing signed-in data
+        // when a uid key is empty on first sign-in.
+        if (accountKey == null || accountKey.isEmpty) {
+          await prefs.remove(legacyKey);
+        }
+      }
+    }
+
     if (raw == null || raw.isEmpty) return null;
     try {
       final decoded = jsonDecode(raw);
@@ -254,13 +280,19 @@ class SessionStore {
     }
   }
 
-  Future<void> save(SessionSnapshot snapshot) async {
+  Future<void> save(SessionSnapshot snapshot, {String? accountKey}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(snapshot.toJson()));
+    final key = keyFor(
+      accountKey ??
+          (snapshot.isSignedIn && (snapshot.accountUid?.isNotEmpty ?? false)
+              ? snapshot.accountUid
+              : 'guest'),
+    );
+    await prefs.setString(key, jsonEncode(snapshot.toJson()));
   }
 
-  Future<void> clear() async {
+  Future<void> clear({String? accountKey}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_key);
+    await prefs.remove(keyFor(accountKey));
   }
 }

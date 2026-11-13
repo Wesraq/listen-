@@ -343,6 +343,16 @@ void putRemoteTracks(String titleId, List<SampleAudioTrack> tracks) {
   remoteTracks[titleId] = List<SampleAudioTrack>.from(tracks);
 }
 
+bool hasRemoteTracks(String titleId) {
+  final tracks = remoteTracks[titleId];
+  return tracks != null && tracks.isNotEmpty;
+}
+
+bool hasRemoteChapters(String titleId) {
+  final chapters = remoteChapters[titleId];
+  return chapters != null && chapters.isNotEmpty;
+}
+
 List<SampleChapter> chaptersFor(String titleId) =>
     remoteChapters[titleId] ??
     sampleChapters[titleId] ??

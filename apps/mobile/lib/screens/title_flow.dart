@@ -78,6 +78,7 @@ Future<void> _launchTitleExperience(
   final listen = mode == 'listen' || (mode == 'auto' && title.isAudio && !title.isDualFormat);
   if (listen) {
     final tracks = tracksFor(title.id);
+    // play() notifies as soon as nowPlaying is set; audio loads in the background.
     await session.play(
       title,
       trackId: sample && tracks.isNotEmpty ? tracks.first.id : null,
@@ -428,12 +429,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _loadChapters() async {
     final session = context.read<SessionState>();
-    await session.refreshTitleParts(widget.title.id);
-    if (!mounted) return;
 
-    final next = chaptersFor(widget.title.id);
-    // Prefer EPUB/text chapter reader (font, theme, bookmarks, prev/next).
-    if (_hasReadableChapters(next)) {
+    void applyReadable(List<SampleChapter> next) {
       final saved = session.progressFor(widget.title.id);
       final savedIndex = next.indexWhere((chapter) => chapter.id == saved?.locationId);
       setState(() {
@@ -448,6 +445,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _pendingScrollFraction = null;
         _restoreScroll(fraction);
       });
+    }
+
+    // Paint immediately when we already have real remote chapters.
+    if (hasRemoteChapters(widget.title.id)) {
+      final cached = remoteChapters[widget.title.id]!;
+      if (_hasReadableChapters(cached)) {
+        applyReadable(cached);
+        unawaited(session.refreshTitleParts(widget.title.id, notify: false));
+        return;
+      }
+    }
+
+    await session.refreshTitleParts(widget.title.id);
+    if (!mounted) return;
+
+    final next = chaptersFor(widget.title.id);
+    // Prefer EPUB/text chapter reader (font, theme, bookmarks, prev/next).
+    if (_hasReadableChapters(next)) {
+      applyReadable(next);
       return;
     }
 

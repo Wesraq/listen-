@@ -232,6 +232,30 @@ class _AudiobookPlayer extends StatelessWidget {
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.42), fontSize: 12),
                 ),
               ],
+              if (session.audioLoading) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Loading audio…',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (session.adBreakActive) ...[
                 const SizedBox(height: 16),
                 AdBreakOverlay(
@@ -624,6 +648,30 @@ class _PodcastPlayer extends StatelessWidget {
                   'Includes short ads that support this creator',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                ),
+              ],
+              if (session.audioLoading) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Loading audio…',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
               ],
               if (session.adBreakActive) ...[

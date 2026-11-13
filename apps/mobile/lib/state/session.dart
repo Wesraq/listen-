@@ -79,7 +79,11 @@ class SessionState extends ChangeNotifier {
   int? sleepTimerMinutesRemaining;
   bool usingRealAudio = false;
   bool usingSampleAsset = false;
+  /// True while signed media / ExoPlayer load is in flight after play().
+  bool audioLoading = false;
   String notice = '';
+  /// Active prefs partition — `guest` or Firebase uid.
+  String _accountKey = 'guest';
 
   /// Strategic ad break state (free-with-ads titles only).
   bool adBreakActive = false;
@@ -163,34 +167,36 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> hydrate() async {
-    final snapshot = await _store.load();
+    final firebaseUser = _auth.currentUser;
+    final initialKey =
+        (firebaseUser != null && firebaseUser.uid.isNotEmpty) ? firebaseUser.uid : 'guest';
+    _accountKey = initialKey;
+    final snapshot = await _store.load(accountKey: initialKey == 'guest' ? null : initialKey);
     if (snapshot != null) {
       _applySnapshot(snapshot);
     }
 
-    final firebaseUser = _auth.currentUser;
     if (firebaseUser != null) {
       _applyFirebaseUser(firebaseUser, markOnboardingComplete: snapshot?.onboardingComplete == true);
+      _accountKey = firebaseUser.uid;
     } else if (snapshot?.isSignedIn == true) {
       authMode = AuthMode.guest;
       uid = null;
+      _accountKey = 'guest';
       if (displayName.trim().isEmpty) displayName = 'Guest';
     }
 
     _authSub?.cancel();
     _authSub = _auth.authStateChanges().listen((user) async {
       if (user == null) {
-        if (authMode == AuthMode.signedIn) {
-          authMode = AuthMode.guest;
-          uid = null;
+        if (authMode == AuthMode.signedIn || _accountKey != 'guest') {
+          await _switchAccount(nextUid: null);
           librarySyncedFromApi = false;
-          if (displayName.trim().isEmpty) displayName = 'Guest';
-          contact = '';
-          await _persist();
           notifyListeners();
         }
         return;
       }
+      await _switchAccount(nextUid: user.uid);
       _applyFirebaseUser(user, markOnboardingComplete: onboardingComplete);
       // /me first: rebinds Studio drafts and grants creators their live titles.
       await _syncProfileFromApi();
@@ -477,7 +483,7 @@ class SessionState extends ChangeNotifier {
     if (!force &&
         recent != null &&
         DateTime.now().difference(recent) < const Duration(seconds: 45) &&
-        (tracksFor(titleId).isNotEmpty || chaptersFor(titleId).isNotEmpty)) {
+        (hasRemoteTracks(titleId) || hasRemoteChapters(titleId))) {
       for (final draft in drafts) {
         if (draft.publishedTitleId == titleId) overlayDraftParts(draft);
       }
@@ -683,6 +689,7 @@ class SessionState extends ChangeNotifier {
     if (!ready) return;
     await _store.save(
       SessionSnapshot(
+        accountUid: isSignedIn ? uid : null,
         onboardingComplete: onboardingComplete,
         isSignedIn: isSignedIn,
         displayName: displayName,
@@ -703,17 +710,61 @@ class SessionState extends ChangeNotifier {
         notes: List<ContentNote>.from(notes),
         downloads: List<OfflineDownload>.from(downloads),
       ),
+      accountKey: _accountKey,
     );
   }
 
+  /// Persist the current account blob, then load the next account's progress/library.
+  Future<void> _switchAccount({required String? nextUid}) async {
+    await _persist();
+    final nextKey = (nextUid == null || nextUid.isEmpty) ? 'guest' : nextUid;
+    if (nextKey == _accountKey) return;
+
+    // Stop playback so the next account doesn't inherit the transport position.
+    try {
+      await stopPlayback();
+    } catch (_) {}
+
+    _accountKey = nextKey;
+    final snapshot = await _store.load(accountKey: nextKey == 'guest' ? null : nextKey);
+
+    progress.clear();
+    owned.clear();
+    saved.clear();
+    notes.clear();
+    drafts.clear();
+    downloads.clear();
+    creatorState = CreatorApplicationState.newApplicant;
+    librarySyncedFromApi = false;
+    _prerollShownForSession.clear();
+    _midrollShownForTrack.clear();
+    _adCompletionTimesMs.clear();
+    _readerMinutesCredited.clear();
+    _signedMediaCache.clear();
+    _cachedBearer = null;
+    _cachedBearerAt = null;
+
+    if (snapshot != null) {
+      _applySnapshot(snapshot);
+    }
+
+    if (nextKey == 'guest') {
+      authMode = AuthMode.guest;
+      uid = null;
+      if (displayName.trim().isEmpty || snapshot == null) displayName = 'Guest';
+      if (snapshot == null) contact = '';
+    }
+  }
+
   void continueAsGuest() {
-    authMode = AuthMode.guest;
-    uid = null;
-    displayName = 'Guest';
-    contact = '';
-    notifyListeners();
-    _persist();
-    unawaited(_ensureMediaAuth());
+    unawaited(() async {
+      await _switchAccount(nextUid: null);
+      displayName = 'Guest';
+      contact = '';
+      notifyListeners();
+      await _persist();
+      await _ensureMediaAuth();
+    }());
   }
 
   Future<void> createAccountWithEmail({
@@ -726,6 +777,8 @@ class SessionState extends ChangeNotifier {
       password: password,
       displayName: name,
     );
+    // Partition prefs before sync so guest continue progress never lands on this uid.
+    await _switchAccount(nextUid: user.uid);
     _applyFirebaseUser(user, markOnboardingComplete: false);
     displayName = name.trim();
     // Full sync so Studio drafts / creator status land immediately after signup.
@@ -737,6 +790,7 @@ class SessionState extends ChangeNotifier {
     required String password,
   }) async {
     final user = await _auth.signIn(email: email, password: password);
+    await _switchAccount(nextUid: user.uid);
     _applyFirebaseUser(user, markOnboardingComplete: false);
     // Full sync: profile (creator approval) + Studio drafts + library.
     // Without this, Studio can look empty until a manual pull-to-refresh.
@@ -799,16 +853,13 @@ class SessionState extends ChangeNotifier {
   }
 
   Future<void> signOut({bool showMessage = true}) async {
+    await _persist();
     await _auth.signOut();
-    authMode = AuthMode.guest;
-    uid = null;
+    await _switchAccount(nextUid: null);
     displayName = 'Guest';
     contact = '';
     creatorState = CreatorApplicationState.newApplicant;
     drafts.clear();
-    _cachedBearer = null;
-    _cachedBearerAt = null;
-    _signedMediaCache.clear();
     notifyListeners();
     await _persist();
     await _ensureMediaAuth();
@@ -1710,13 +1761,15 @@ class SessionState extends ChangeNotifier {
     double? positionSec,
     bool autoplay = true,
   }) async {
-    // Prefer cached tracks so Library/Continue open immediately.
-    if (tracksFor(title.id).isEmpty) {
+    // Wait only when we lack real remote tracks (placeholders don't count).
+    if (!hasRemoteTracks(title.id)) {
       await refreshTitleParts(title.id);
     } else {
       unawaited(refreshTitleParts(title.id, notify: false));
     }
-    final tracks = tracksFor(title.id);
+    final tracks = hasRemoteTracks(title.id)
+        ? remoteTracks[title.id]!
+        : tracksFor(title.id);
     if (tracks.isEmpty) return;
 
     final saved = progress[title.id];
@@ -1732,22 +1785,45 @@ class SessionState extends ChangeNotifier {
     nowPlayingTrack = track;
     playbackPositionSec = start.clamp(0, track.durationSec.toDouble());
     _qualifiedListenAccumSec = 0;
+    audioLoading = true;
 
     final needsPreroll = title.showsAds &&
         !_prerollShownForSession.contains('${title.id}:${track.id}') &&
         _hourlyAdSlotsRemaining > 0;
     if (needsPreroll && autoplay) {
       playing = false;
-      await _engageAudioEngine(startAt: playbackPositionSec, autoplay: false);
-      _syncAudioProgress(persist: true);
-      _startAdBreak(placement: 'preroll');
+      notifyListeners();
+      unawaited(_engageThenPreroll(startAt: playbackPositionSec));
       return;
     }
 
     playing = autoplay;
-    await _engageAudioEngine(startAt: playbackPositionSec, autoplay: autoplay);
-    _syncAudioProgress(persist: true);
     notifyListeners();
+    unawaited(_engageInBackground(startAt: playbackPositionSec, autoplay: autoplay));
+  }
+
+  Future<void> _engageThenPreroll({required double startAt}) async {
+    try {
+      await _engageAudioEngine(startAt: startAt, autoplay: false);
+      _syncAudioProgress(persist: true);
+      _startAdBreak(placement: 'preroll');
+    } finally {
+      audioLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _engageInBackground({
+    required double startAt,
+    required bool autoplay,
+  }) async {
+    try {
+      await _engageAudioEngine(startAt: startAt, autoplay: autoplay);
+      _syncAudioProgress(persist: true);
+    } finally {
+      audioLoading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> selectTrack(SampleAudioTrack track, {bool autoplay = true}) async {
@@ -1755,9 +1831,9 @@ class SessionState extends ChangeNotifier {
     nowPlayingTrack = track;
     playbackPositionSec = 0;
     playing = autoplay;
-    await _engageAudioEngine(startAt: 0, autoplay: autoplay);
-    _syncAudioProgress(persist: true);
+    audioLoading = true;
     notifyListeners();
+    unawaited(_engageInBackground(startAt: 0, autoplay: autoplay));
   }
 
   Future<void> togglePlay() async {
@@ -1839,6 +1915,7 @@ class SessionState extends ChangeNotifier {
     await _audio.stop();
     usingRealAudio = false;
     usingSampleAsset = false;
+    audioLoading = false;
     nowPlaying = null;
     nowPlayingTrack = null;
     playing = false;
