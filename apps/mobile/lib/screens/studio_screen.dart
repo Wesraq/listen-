@@ -36,22 +36,34 @@ class StudioScreen extends StatelessWidget {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
             sliver: SliverToBoxAdapter(
-              child: switch (session.creatorState) {
-                CreatorApplicationState.newApplicant => _WelcomePanel(
-                    onApply: () => _showApplySheet(context, session),
-                  ),
-                CreatorApplicationState.pending => _PendingPanel(
-                    onRefresh: () async {
-                      await session.refreshFromApi();
-                      session.showNotice(
-                        session.creatorState == CreatorApplicationState.approved
-                            ? 'Creator access activated.'
-                            : 'Still pending admin approval.',
-                      );
-                    },
-                  ),
-                CreatorApplicationState.approved => const _ApprovedStudio(),
-              },
+              child: () {
+                final hasCreatorWork = session.drafts.any(
+                  (d) =>
+                      d.status == 'live' ||
+                      d.status == 'submitted' ||
+                      d.publishedTitleId != null,
+                );
+                final effective = session.creatorState == CreatorApplicationState.approved ||
+                        hasCreatorWork
+                    ? CreatorApplicationState.approved
+                    : session.creatorState;
+                return switch (effective) {
+                  CreatorApplicationState.newApplicant => _WelcomePanel(
+                      onApply: () => _showApplySheet(context, session),
+                    ),
+                  CreatorApplicationState.pending => _PendingPanel(
+                      onRefresh: () async {
+                        await session.refreshFromApi();
+                        session.showNotice(
+                          session.creatorState == CreatorApplicationState.approved
+                              ? 'Creator access activated.'
+                              : 'Still pending admin approval.',
+                        );
+                      },
+                    ),
+                  CreatorApplicationState.approved => const _ApprovedStudio(),
+                };
+              }(),
             ),
           ),
         ],

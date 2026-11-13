@@ -225,6 +225,20 @@ export class AdminController {
         // Prefer the live profile uid (email match) so Firebase accounts get the entitlement.
         const profile = this.store.findUser(draft.creatorUid, draft.creatorEmail);
         const ownerUid = profile?.uid ?? draft.creatorUid;
+        this.store.setCreatorStatus(
+          ownerUid,
+          'approved',
+          session.admin.email,
+          `Auto-approved on content publish (${published.id})`,
+        );
+        if (ownerUid !== draft.creatorUid) {
+          this.store.setCreatorStatus(
+            draft.creatorUid,
+            'approved',
+            session.admin.email,
+            `Auto-approved on content publish (${published.id})`,
+          );
+        }
         this.library.grantOwnership(ownerUid, published.id);
         if (ownerUid !== draft.creatorUid) {
           this.library.grantOwnership(draft.creatorUid, published.id);

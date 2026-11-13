@@ -45,17 +45,36 @@ export class MeController {
       this.studio.rebindCreatorUid(user.uid, profile.uid, profile.email);
     }
     // Keep the creator entitled to their own live titles.
-    for (const draft of this.studio.listDrafts(profile.uid, profile.email)) {
+    const drafts = this.studio.listDrafts(profile.uid, profile.email);
+    for (const draft of drafts) {
       if (draft.publishedTitleId) {
         this.library.grantOwnership(profile.uid, draft.publishedTitleId);
       }
+    }
+    // Anyone with live/submitted Studio work is already a creator — heal status
+    // when catalogue restore / content approval skipped setCreatorStatus.
+    const hasCreatorWork = drafts.some(
+      (d) => d.status === 'live' || d.status === 'submitted' || Boolean(d.publishedTitleId),
+    );
+    let creatorStatus = profile.creatorStatus;
+    if (
+      hasCreatorWork &&
+      (creatorStatus === 'none' || creatorStatus === 'pending')
+    ) {
+      const healed = this.profiles.setCreatorStatus(
+        profile.uid,
+        'approved',
+        'system:/me',
+        'Auto-approved from live/submitted Studio drafts',
+      );
+      creatorStatus = healed?.creatorStatus ?? 'approved';
     }
     return {
       uid: profile.uid,
       email: profile.email,
       displayName: profile.displayName,
       role: profile.role,
-      creatorStatus: profile.creatorStatus,
+      creatorStatus,
       market: {
         code: 'ZM',
         label: 'Zambia',

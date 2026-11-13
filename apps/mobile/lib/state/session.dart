@@ -293,8 +293,8 @@ class SessionState extends ChangeNotifier {
       return cached.url;
     }
     await _ensureMediaAuth();
+    // Allow null bearer so `/media/:id/sign-free` still runs for guests.
     final bearer = await _apiBearer();
-    if (bearer == null) return mediaUrl;
     final signed = await _api.signedMediaUrl(bearer, mediaUrl);
     if (signed == null || signed.isEmpty) return mediaUrl;
     _signedMediaCache[id] = (url: signed, at: DateTime.now());
@@ -311,7 +311,8 @@ class SessionState extends ChangeNotifier {
     final remote = await _api.fetchTitles();
     if (remote != null) {
       replaceCatalogue(remote, fromApi: true);
-      await _syncCatalogueParts(remote);
+      // Warm a few visible/continue titles in the background — never block Home.
+      unawaited(_warmCatalogueParts(remote));
     }
     // Fill gaps when API catalogue lags behind live Studio drafts.
     _mergeLiveDraftsIntoCatalogue();
@@ -407,10 +408,18 @@ class SessionState extends ChangeNotifier {
     return items;
   }
 
-  Future<void> _syncCatalogueParts(List<TitleItem> remoteTitles) async {
-    for (final title in remoteTitles) {
-      await refreshTitleParts(title.id, notify: false);
-    }
+  /// Prefetch parts for a small set of likely-opened titles (continue + owned).
+  Future<void> _warmCatalogueParts(List<TitleItem> remoteTitles) async {
+    final prefer = <String>{
+      ...continueTitles(limit: 6).map((t) => t.id),
+      ...libraryOwnedIds.take(8),
+      ...remoteTitles.take(8).map((t) => t.id),
+    };
+    final ids = prefer.where((id) => id.isNotEmpty).take(12).toList();
+    await Future.wait(
+      ids.map((id) => refreshTitleParts(id, notify: false)),
+      eagerError: false,
+    );
   }
 
   /// Push Studio draft chapters/episodes into the in-memory catalogue overlay.
@@ -603,6 +612,17 @@ class SessionState extends ChangeNotifier {
     if (profile.displayName != null && profile.displayName!.trim().isNotEmpty) {
       displayName = profile.displayName!.trim();
     }
+    _promoteCreatorFromDrafts();
+  }
+
+  /// Live/submitted Studio work means the account is already a creator.
+  void _promoteCreatorFromDrafts() {
+    if (creatorState == CreatorApplicationState.approved) return;
+    final hasCreatorWork = drafts.any(
+      (d) => d.status == 'live' || d.status == 'submitted' || d.publishedTitleId != null,
+    );
+    if (!hasCreatorWork) return;
+    creatorState = CreatorApplicationState.approved;
   }
 
   void _applySnapshot(SessionSnapshot snapshot) {
@@ -1059,12 +1079,14 @@ class SessionState extends ChangeNotifier {
     drafts
       ..clear()
       ..addAll(merged);
+    _promoteCreatorFromDrafts();
     _hydrateStudioDraftsFromCatalogue();
     await _backfillDraftPartsFromCatalogue();
   }
 
   /// Offline / sync-gap fallback: show live creator catalogue titles you authored.
   void _hydrateStudioDraftsFromCatalogue() {
+    _promoteCreatorFromDrafts();
     if (creatorState != CreatorApplicationState.approved) return;
     if (drafts.isNotEmpty) return;
     final author = displayName.trim().toLowerCase();
@@ -1688,7 +1710,12 @@ class SessionState extends ChangeNotifier {
     double? positionSec,
     bool autoplay = true,
   }) async {
-    await refreshTitleParts(title.id);
+    // Prefer cached tracks so Library/Continue open immediately.
+    if (tracksFor(title.id).isEmpty) {
+      await refreshTitleParts(title.id);
+    } else {
+      unawaited(refreshTitleParts(title.id, notify: false));
+    }
     final tracks = tracksFor(title.id);
     if (tracks.isEmpty) return;
 
