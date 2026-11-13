@@ -29,6 +29,8 @@ class AdMobService {
     if (_initialised) return;
     if (kIsWeb) return;
     try {
+      // Give the Activity a moment to attach before touching the Ads SDK.
+      await Future<void>.delayed(const Duration(milliseconds: 400));
       await MobileAds.instance.initialize();
       _initialised = true;
       // Warm the first unit so preroll isn't blocked on cold load.
@@ -36,6 +38,7 @@ class AdMobService {
     } catch (error, stackTrace) {
       debugPrint('AdMob init failed: $error');
       debugPrintStack(stackTrace: stackTrace);
+      _initialised = false;
     }
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +9,11 @@ import 'services/admob_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+  };
 
   try {
     await Firebase.initializeApp(
@@ -18,8 +25,7 @@ Future<void> main() async {
     debugPrintStack(stackTrace: stackTrace);
   }
 
-  // AdMob SDK — test unit IDs by default; swap via --dart-define for production.
-  await AdMobService.instance.initialise();
-
+  // Never block first frame on ads — a native AdMob failure must not kill startup.
   runApp(const ListenPlusApp());
+  unawaited(AdMobService.instance.initialise());
 }
