@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,22 +11,12 @@ import '../state/session.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ad_break_overlay.dart';
 import '../widgets/content_notes_sheet.dart';
+import '../widgets/title_cover.dart';
 import 'creator_profile_screen.dart';
 import 'player_sheet.dart';
 
 Widget _titleCover(SessionState session, TitleItem title) {
-  for (final draft in session.drafts) {
-    if (draft.publishedTitleId != title.id) continue;
-    final path = draft.coverImagePath;
-    if (path != null && path.isNotEmpty && File(path).existsSync()) {
-      return Image.file(File(path), fit: BoxFit.cover);
-    }
-  }
-  return Image.asset(
-    title.imageAsset,
-    fit: BoxFit.cover,
-    errorBuilder: (_, _, _) => Image.asset('assets/images/zambezi.jpg', fit: BoxFit.cover),
-  );
+  return TitleCover(session: session, title: title);
 }
 
 class TitleFlowLaunch {
@@ -42,6 +33,10 @@ class TitleFlowLaunch {
 }
 
 Future<void> openTitleFlow(BuildContext context, TitleItem title) async {
+  // Warm chapters/tracks in the background while the sheet is open.
+  final session = context.read<SessionState>();
+  unawaited(session.refreshTitleParts(title.id, notify: false));
+
   final launch = await showModalBottomSheet<TitleFlowLaunch>(
     context: context,
     isScrollControlled: true,
@@ -78,8 +73,7 @@ Future<void> _launchTitleExperience(
   bool sample = false,
 }) async {
   final session = context.read<SessionState>();
-  await session.refreshTitleParts(title.id);
-  if (!context.mounted) return;
+  // `play` / reader load refresh parts themselves — don't await a duplicate Cloud Run round-trip here.
 
   final listen = mode == 'listen' || (mode == 'auto' && title.isAudio && !title.isDualFormat);
   if (listen) {
@@ -267,7 +261,12 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                 contentPadding: EdgeInsets.zero,
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.asset(title.imageAsset, width: 48, height: 64, fit: BoxFit.cover),
+                  child: TitleCover(
+                    session: context.read<SessionState>(),
+                    title: title,
+                    width: 48,
+                    height: 64,
+                  ),
                 ),
                 title: Text(title.name),
                 subtitle: Text('${title.formatLabel} · ${title.author}'),
@@ -871,10 +870,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: AdBreakOverlay(
                 placement: 'chapter',
-                elapsedSec: session.adBreakElapsedSec,
-                skippable: session.adBreakSkippable,
+                phase: session.adBreakPhase,
                 onSkip: session.skipAdBreak,
-                onContinue: () => session.completeAdBreak(skipped: false),
+                onWatch: session.watchAdBreak,
               ),
             ),
           Expanded(

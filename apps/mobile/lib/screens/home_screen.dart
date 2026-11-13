@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../widgets/page_intro.dart';
 import '../widgets/status_views.dart';
 import '../widgets/title_card.dart';
+import '../widgets/title_cover.dart';
 import 'browse_screen.dart';
 import 'title_flow.dart';
 
@@ -123,7 +124,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   AspectRatio(
                     aspectRatio: 16 / 10,
-                    child: Image.asset(featured.imageAsset, fit: BoxFit.cover),
+                    child: Image.asset(
+                      featured.imageAsset,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          Image.asset('assets/images/zambezi.jpg', fit: BoxFit.cover),
+                    ),
                   ),
                   Positioned.fill(
                     child: DecoratedBox(
@@ -202,7 +208,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.asset(title.imageAsset, width: 44, height: 64, fit: BoxFit.cover),
+                            child: TitleCover(
+                              session: session,
+                              title: title,
+                              width: 44,
+                              height: 64,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(

@@ -160,6 +160,7 @@ class CreatorDraft {
     this.coverImageName,
     this.coverImagePath,
     this.coverImageBytes,
+    this.coverImageId,
     this.chapters = const [],
     this.episodes = const [],
     this.publishedTitleId,
@@ -185,6 +186,8 @@ class CreatorDraft {
   final String? coverImageName;
   final String? coverImagePath;
   final int? coverImageBytes;
+  /// Durable uploaded cover media id.
+  final String? coverImageId;
   final List<ContentChapter> chapters;
   final List<ContentEpisode> episodes;
   final String? publishedTitleId;
@@ -295,6 +298,10 @@ class CreatorDraft {
       monetisationMode: monetisationMode,
       subscriptionEligible: subscriptionEligible,
       mediaName: mediaName,
+      coverImageId: coverImageId,
+      coverUrl: coverImageId == null || coverImageId!.isEmpty
+          ? null
+          : '/v1/media/$coverImageId',
     );
   }
 
@@ -318,6 +325,7 @@ class CreatorDraft {
     String? coverImageName,
     String? coverImagePath,
     int? coverImageBytes,
+    String? coverImageId,
     List<ContentChapter>? chapters,
     List<ContentEpisode>? episodes,
     String? publishedTitleId,
@@ -342,6 +350,7 @@ class CreatorDraft {
         coverImageName: clearCover ? null : (coverImageName ?? this.coverImageName),
         coverImagePath: clearCover ? null : (coverImagePath ?? this.coverImagePath),
         coverImageBytes: clearCover ? null : (coverImageBytes ?? this.coverImageBytes),
+        coverImageId: clearCover ? null : (coverImageId ?? this.coverImageId),
         chapters: chapters ?? this.chapters,
         episodes: episodes ?? this.episodes,
         publishedTitleId: publishedTitleId ?? this.publishedTitleId,
@@ -365,6 +374,7 @@ class CreatorDraft {
         'coverImageName': coverImageName,
         'coverImagePath': coverImagePath,
         'coverImageBytes': coverImageBytes,
+        'coverImageId': coverImageId,
         'chapters': chapters.map((c) => c.toJson()).toList(),
         'episodes': episodes.map((e) => e.toJson()).toList(),
         'publishedTitleId': publishedTitleId,
@@ -426,6 +436,7 @@ class CreatorDraft {
       coverImageName: json['coverImageName'] == null ? null : '${json['coverImageName']}',
       coverImagePath: json['coverImagePath'] == null ? null : '${json['coverImagePath']}',
       coverImageBytes: (json['coverImageBytes'] as num?)?.toInt(),
+      coverImageId: json['coverImageId'] == null ? null : '${json['coverImageId']}',
       chapters: parseChapters(),
       episodes: parseEpisodes(),
       publishedTitleId:

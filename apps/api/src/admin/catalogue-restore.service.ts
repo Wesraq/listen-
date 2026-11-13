@@ -60,6 +60,7 @@ export class CatalogueRestoreService implements OnModuleInit {
         category: draft.genre,
         mediaName: draft.mediaName,
         mediaId: draft.mediaId,
+        coverImageId: draft.coverImageId,
         monetisationMode: draft.monetisationMode,
         subscriptionEligible: draft.subscriptionEligible,
         creatorUid: draft.creatorUid,

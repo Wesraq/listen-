@@ -5,6 +5,7 @@ import '../data/catalogue.dart';
 import '../state/session.dart';
 import '../theme/app_theme.dart';
 import '../widgets/page_intro.dart';
+import '../widgets/title_cover.dart';
 import 'support_legal.dart';
 import 'title_flow.dart';
 
@@ -174,7 +175,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     contentPadding: EdgeInsets.zero,
                     leading: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.asset(title.imageAsset, width: 40, height: 56, fit: BoxFit.cover),
+                      child: TitleCover(
+                        session: session,
+                        title: title,
+                        width: 40,
+                        height: 56,
+                      ),
                     ),
                     title: Text(title.name),
                     subtitle: Text(

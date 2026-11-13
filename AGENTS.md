@@ -14,5 +14,6 @@
 - Auth uses Firebase on mobile; catalogue/library sync to `apps/api` when reachable (dev Bearer). Checkout remains simulated until payment webhooks verify entitlements.
 - Firebase iOS is configured (`apps/mobile/ios/Runner/GoogleService-Info.plist`, bundle `io.listen.listen`). Mobile email auth uses FlutterFire (`firebase_auth`). Enable Email/Password in the Firebase console. Do not commit Android `google-services.json` until provided.
 - Never connect sample checkout or payout states to real financial services; provider verification and commercial policy require a separate backend implementation.
+- Free-with-ads titles use Google AdMob rewarded interstitials (`google_mobile_ads`). Builds default to Google test app/unit IDs; ship production IDs via Info.plist / AndroidManifest App IDs plus `--dart-define=ADMOB_*=…` and `ADMOB_USE_TEST_ADS=false`. Creator advertising ledger credits only after a real reward callback (and optionally AdMob SSV at `/v1/ads/ssv`). AdMob pays the publisher account — creator splits are internal ledger, not direct AdMob payouts.
 - Do not put secret values in the repo.
 - Do not edit auto-generated files such as `src/routeTree.gen.ts` by hand.

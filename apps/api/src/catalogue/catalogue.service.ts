@@ -47,6 +47,10 @@ export class CatalogueService {
     return this.store.findTitleIdByMediaId(mediaId);
   }
 
+  isCoverMedia(mediaId: string): boolean {
+    return this.store.isCoverMedia(mediaId);
+  }
+
   publishCreatorTitle(input: {
     draftId: string;
     title: string;
@@ -58,6 +62,7 @@ export class CatalogueService {
     description?: string;
     mediaName?: string;
     mediaId?: string;
+    coverImageId?: string;
     category?: string;
     monetisationMode?: TitleDto['monetisationMode'];
     subscriptionEligible?: boolean;

@@ -278,12 +278,22 @@ export class CatalogueStore implements OnModuleInit {
     if (!mediaId) return undefined;
     const needle = `/v1/media/${mediaId}`;
     for (const title of this.titles) {
+      if (title.coverImageId === mediaId) return title.id;
+      if (title.coverUrl?.includes(mediaId) || title.coverUrl === needle) return title.id;
       if (title.mediaUrl?.includes(mediaId) || title.mediaUrl === needle) return title.id;
       for (const track of this.tracksByTitle[title.id] ?? []) {
         if (track.mediaUrl?.includes(mediaId) || track.mediaUrl === needle) return title.id;
       }
     }
     return undefined;
+  }
+
+  /** Catalogue covers are public marketing artwork (not entitlement-gated). */
+  isCoverMedia(mediaId: string): boolean {
+    if (!mediaId) return false;
+    return this.titles.some(
+      (t) => t.coverImageId === mediaId || t.coverUrl?.includes(`/media/${mediaId}`),
+    );
   }
 
   /**
@@ -301,6 +311,7 @@ export class CatalogueStore implements OnModuleInit {
     description?: string;
     mediaName?: string;
     mediaId?: string;
+    coverImageId?: string;
     category?: string;
     monetisationMode?: TitleDto['monetisationMode'];
     subscriptionEligible?: boolean;
@@ -317,13 +328,15 @@ export class CatalogueStore implements OnModuleInit {
     }[];
   }): TitleDto {
     const id = `creator-${input.draftId.replace(/^draft-/, '').slice(0, 12)}`;
-    // Only ship assets that exist in apps/mobile/assets/images/.
+    // Fallback only when the creator has not uploaded cover art.
     const imageAsset =
       input.format === 'ebook' || input.format === 'ebook_audio'
         ? 'assets/images/jacaranda.jpg'
         : input.format === 'podcast'
           ? 'assets/images/zambezi.jpg'
           : 'assets/images/quiet.jpg';
+    const coverImageId = input.coverImageId?.trim() || undefined;
+    const coverUrl = coverImageId ? `/v1/media/${coverImageId}` : undefined;
 
     const chapterCount = input.chapters?.length ?? 0;
     const episodeCount = input.episodes?.length ?? 0;
@@ -389,6 +402,13 @@ export class CatalogueStore implements OnModuleInit {
       existing.mediaUrl = input.mediaId
         ? `/v1/media/${input.mediaId}`
         : existing.mediaUrl;
+      if (coverImageId) {
+        existing.coverImageId = coverImageId;
+        existing.coverUrl = coverUrl;
+      } else if (input.coverImageId === '') {
+        existing.coverImageId = undefined;
+        existing.coverUrl = undefined;
+      }
       title = existing;
     } else {
       title = {
@@ -409,6 +429,8 @@ export class CatalogueStore implements OnModuleInit {
         creatorUid: input.creatorUid,
         mediaName: input.mediaName,
         mediaUrl: input.mediaId ? `/v1/media/${input.mediaId}` : undefined,
+        coverImageId,
+        coverUrl,
       };
       this.titles.unshift(title);
     }

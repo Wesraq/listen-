@@ -301,6 +301,7 @@ export class StudioStore implements OnModuleInit {
     mediaId?: string;
     coverImageName?: string;
     coverImageBytes?: number;
+    coverImageId?: string;
     chapters?: StudioChapter[];
     episodes?: StudioEpisode[];
     status?: StudioDraftStatus;
@@ -325,6 +326,7 @@ export class StudioStore implements OnModuleInit {
       mediaId: input.mediaId,
       coverImageName: input.coverImageName,
       coverImageBytes: input.coverImageBytes,
+      coverImageId: input.coverImageId?.trim() || undefined,
       chapters: this.normalizeChapters(input.chapters),
       episodes: this.normalizeEpisodes(input.episodes),
       status: input.status ?? 'draft',
@@ -364,6 +366,12 @@ export class StudioStore implements OnModuleInit {
 
   findDraft(id: string): StudioDraft | undefined {
     return this.drafts.find((d) => d.id === id);
+  }
+
+  /** True when any draft references this media as cover artwork. */
+  isCoverMedia(mediaId: string): boolean {
+    if (!mediaId) return false;
+    return this.drafts.some((d) => d.coverImageId === mediaId);
   }
 
   listSubmitted(): StudioDraft[] {
@@ -426,6 +434,7 @@ export class StudioStore implements OnModuleInit {
       mediaId?: string;
       coverImageName?: string;
       coverImageBytes?: number;
+      coverImageId?: string;
       chapters?: StudioChapter[];
       episodes?: StudioEpisode[];
       status?: StudioDraftStatus;
@@ -455,6 +464,9 @@ export class StudioStore implements OnModuleInit {
     }
     if (patch.coverImageName !== undefined) draft.coverImageName = patch.coverImageName;
     if (patch.coverImageBytes !== undefined) draft.coverImageBytes = patch.coverImageBytes;
+    if (patch.coverImageId !== undefined) {
+      draft.coverImageId = patch.coverImageId.trim() || undefined;
+    }
     if (patch.chapters !== undefined) draft.chapters = this.normalizeChapters(patch.chapters);
     if (patch.episodes !== undefined) draft.episodes = this.normalizeEpisodes(patch.episodes);
     if (patch.status) draft.status = patch.status;

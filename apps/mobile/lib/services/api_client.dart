@@ -99,6 +99,15 @@ class ListenApiClient {
         if (mediaUrl is String && mediaUrl.isNotEmpty) {
           map['mediaUrl'] = absoluteMediaUrl(mediaUrl);
         }
+        final coverUrl = map['coverUrl'];
+        if (coverUrl is String && coverUrl.isNotEmpty) {
+          map['coverUrl'] = absoluteMediaUrl(coverUrl);
+        } else {
+          final coverId = map['coverImageId'];
+          if (coverId is String && coverId.isNotEmpty) {
+            map['coverUrl'] = absoluteMediaUrl('/v1/media/$coverId');
+          }
+        }
         return TitleItem.fromJson(map);
       }).toList();
     } catch (_) {
@@ -349,6 +358,7 @@ class ListenApiClient {
       mediaId: map['mediaId'] == null ? null : '${map['mediaId']}',
       coverImageName: map['coverImageName'] == null ? null : '${map['coverImageName']}',
       coverImageBytes: (map['coverImageBytes'] as num?)?.toInt(),
+      coverImageId: map['coverImageId'] == null ? null : '${map['coverImageId']}',
       chapters: chapters,
       episodes: episodes,
       publishedTitleId:
@@ -486,6 +496,7 @@ class ListenApiClient {
     String? mediaId,
     String? coverImageName,
     int? coverImageBytes,
+    String? coverImageId,
     List<ContentChapter> chapters = const [],
     List<ContentEpisode> episodes = const [],
     bool submit = false,
@@ -519,6 +530,7 @@ class ListenApiClient {
               'mediaId': mediaId,
               'coverImageName': coverImageName,
               'coverImageBytes': coverImageBytes,
+              'coverImageId': coverImageId,
               'chapters': chapters.map((c) => c.toJson()).toList(),
               'episodes': episodes
                   .map(
@@ -550,6 +562,7 @@ class ListenApiClient {
             mediaId: mediaId,
             coverImageName: coverImageName,
             coverImageBytes: coverImageBytes,
+            coverImageId: coverImageId,
             chapters: chapters,
             episodes: episodes,
           );
@@ -573,6 +586,7 @@ class ListenApiClient {
     String? mediaId,
     String? coverImageName,
     int? coverImageBytes,
+    String? coverImageId,
     List<ContentChapter>? chapters,
     List<ContentEpisode>? episodes,
     bool? submit,
@@ -599,6 +613,7 @@ class ListenApiClient {
         'mediaId': mediaId,
         'coverImageName': coverImageName,
         'coverImageBytes': coverImageBytes,
+        'coverImageId': coverImageId,
         'email': email,
         'displayName': displayName,
       };
@@ -774,6 +789,8 @@ class ListenApiClient {
     required String placement,
     required int completedSec,
     String? trackId,
+    String source = 'admob',
+    bool rewardEarned = false,
   }) async {
     try {
       final response = await _client
@@ -788,6 +805,8 @@ class ListenApiClient {
               'placement': placement,
               'completedSec': completedSec,
               if (trackId != null) 'trackId': trackId,
+              'source': source,
+              'rewardEarned': rewardEarned,
             }),
           )
           .timeout(const Duration(seconds: 5));

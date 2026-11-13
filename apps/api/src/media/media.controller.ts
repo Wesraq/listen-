@@ -22,6 +22,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { CatalogueService } from '../catalogue/catalogue.service';
 import { LibraryService } from '../library/library.service';
+import { StudioStore } from '../studio/studio.store';
 import { MediaSigningService } from './media-signing.service';
 import { MediaStore } from './media.store';
 
@@ -33,6 +34,7 @@ export class MediaController {
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
     @Inject(LibraryService) private readonly library: LibraryService,
+    @Inject(StudioStore) private readonly studio: StudioStore,
   ) {}
 
   /** Upload creator audio/ebook bytes (Firebase Storage when cloud-backed). */
@@ -89,7 +91,7 @@ export class MediaController {
    */
   @Post(':id/sign-free')
   async signFree(@Param('id') id: string) {
-    if (!this.isFreeMedia(id)) {
+    if (!this.isFreeMedia(id) && !this.isCoverMedia(id)) {
       throw new ForbiddenException('Only free titles can be signed without auth');
     }
     // Ensure the object exists (recovers Storage-only uploads).
@@ -100,7 +102,8 @@ export class MediaController {
 
   /**
    * Stream uploaded media. Requires a valid signature when signing is enabled
-   * (default on Cloud Run). Free catalogue media may stream without a signature.
+   * (default on Cloud Run). Free catalogue media and cover artwork may stream
+   * without a signature.
    */
   @Get(':id')
   async stream(
@@ -110,7 +113,8 @@ export class MediaController {
     @Headers('authorization') authorization: string | undefined,
     @Res() res: Response,
   ) {
-    const free = this.isFreeMedia(id);
+    const isCover = this.isCoverMedia(id);
+    const free = isCover || this.isFreeMedia(id);
     if (this.signing.requireSigned()) {
       if (!free) {
         this.signing.assertValid(id, exp, sig);
@@ -131,7 +135,10 @@ export class MediaController {
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(meta.originalName)}"`,
     );
-    res.setHeader('Cache-Control', free ? 'public, max-age=300' : 'private, max-age=300');
+    res.setHeader(
+      'Cache-Control',
+      isCover ? 'public, max-age=86400' : free ? 'public, max-age=300' : 'private, max-age=300',
+    );
     stream.on('error', () => {
       if (!res.headersSent) {
         res.status(404).json({ message: 'Media file missing' });
@@ -140,6 +147,10 @@ export class MediaController {
       }
     });
     stream.pipe(res);
+  }
+
+  private isCoverMedia(mediaId: string): boolean {
+    return this.catalogue.isCoverMedia(mediaId) || this.studio.isCoverMedia(mediaId);
   }
 
   private isFreeMedia(mediaId: string): boolean {
@@ -154,6 +165,8 @@ export class MediaController {
   }
 
   private async assertCanAccessMedia(user: AuthUser, mediaId: string) {
+    if (this.isCoverMedia(mediaId)) return;
+
     const titleId = this.catalogue.findTitleIdByMediaId(mediaId);
     if (titleId) {
       const entitlement = this.library.entitlement(user.uid, titleId);

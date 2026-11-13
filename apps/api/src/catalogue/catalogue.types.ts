@@ -33,6 +33,10 @@ export interface TitleDto {
   mediaName?: string;
   /** API-relative URL for the uploaded ebook file (`/v1/media/...`). */
   mediaUrl?: string;
+  /** Uploaded cover media id (Firebase Storage / local media store). */
+  coverImageId?: string;
+  /** API-relative URL for the cover (`/v1/media/...`) — public catalogue artwork. */
+  coverUrl?: string;
 }
 
 export interface CategoryDto {

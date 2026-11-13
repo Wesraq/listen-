@@ -19,6 +19,8 @@ class TitleItem {
     this.creatorUid,
     this.mediaName,
     this.mediaUrl,
+    this.coverImageId,
+    this.coverUrl,
   });
 
   final String id;
@@ -41,6 +43,10 @@ class TitleItem {
   final String? mediaName;
   /// API media URL for the uploaded ebook file.
   final String? mediaUrl;
+  /// Durable cover media id (Firebase Storage / API media).
+  final String? coverImageId;
+  /// Absolute or API-relative cover URL.
+  final String? coverUrl;
 
   String get resolvedMonetisationMode {
     if (monetisationMode != null && monetisationMode!.isNotEmpty) {
@@ -160,6 +166,8 @@ class TitleItem {
       creatorUid: json['creatorUid'] == null ? null : '${json['creatorUid']}',
       mediaName: json['mediaName'] == null ? null : '${json['mediaName']}',
       mediaUrl: json['mediaUrl'] == null ? null : '${json['mediaUrl']}',
+      coverImageId: json['coverImageId'] == null ? null : '${json['coverImageId']}',
+      coverUrl: json['coverUrl'] == null ? null : '${json['coverUrl']}',
     );
   }
 }

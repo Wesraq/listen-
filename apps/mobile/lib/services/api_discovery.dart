@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -22,9 +20,26 @@ class ApiDiscovery {
 
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString(_prefsKey);
-    final candidates = ApiConfig.discoveryCandidates(cached: cached);
+
+    // Prefer the known Cloud Run / dart-define host immediately — don't burn
+    // seconds probing dead LAN IPs before every first request.
+    final preferred = ApiConfig.baseUrl;
+    if (await _healthy(preferred, timeout: const Duration(seconds: 4))) {
+      _resolved = preferred;
+      if (cached != preferred) await prefs.setString(_prefsKey, preferred);
+      return preferred;
+    }
+
+    final candidates = ApiConfig.discoveryCandidates(cached: cached)
+        .where((c) => c != preferred)
+        .toList();
 
     for (final base in candidates) {
+      // Skip obvious local/LAN hosts when we already have a public HTTPS API —
+      // they just add multi-second timeouts on cellular.
+      if (preferred.startsWith('https://') && _isLocalCandidate(base)) {
+        continue;
+      }
       if (await _healthy(base)) {
         _resolved = base;
         if (cached != base) await prefs.setString(_prefsKey, base);
@@ -32,48 +47,33 @@ class ApiDiscovery {
       }
     }
 
-    // Try expanding from a reachable health payload's lanHosts (if any candidate answered).
-    for (final base in candidates) {
-      final hosts = await _lanHosts(base);
-      for (final host in hosts) {
-        if (await _healthy(host)) {
-          _resolved = host;
-          await prefs.setString(_prefsKey, host);
-          return host;
-        }
-      }
-    }
-
-    _resolved = ApiConfig.baseUrl;
+    _resolved = preferred;
     return _resolved!;
   }
 
-  Future<bool> _healthy(String base) async {
+  bool _isLocalCandidate(String base) {
+    final lower = base.toLowerCase();
+    return lower.contains('127.0.0.1') ||
+        lower.contains('10.0.2.2') ||
+        lower.contains('192.168.') ||
+        lower.contains('10.136.') ||
+        lower.contains('172.16.') ||
+        lower.contains('169.254.');
+  }
+
+  Future<bool> _healthy(
+    String base, {
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
     try {
       final uri = Uri.parse('$base/health');
       final response = await _client
           .get(uri, headers: tunnelAwareHeaders())
-          .timeout(const Duration(seconds: 8));
+          .timeout(timeout);
       return response.statusCode == 200;
     } catch (_) {
       return false;
     }
   }
 
-  Future<List<String>> _lanHosts(String base) async {
-    try {
-      final uri = Uri.parse('$base/health');
-      final response = await _client
-          .get(uri, headers: tunnelAwareHeaders())
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return const [];
-      final decoded = jsonDecode(response.body);
-      if (decoded is! Map) return const [];
-      final hosts = decoded['lanHosts'];
-      if (hosts is! List) return const [];
-      return hosts.whereType<String>().toList();
-    } catch (_) {
-      return const [];
-    }
-  }
 }

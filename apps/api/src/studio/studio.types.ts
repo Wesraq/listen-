@@ -69,9 +69,11 @@ export interface StudioDraft {
   mediaBytes?: number;
   /** Uploaded primary media id (ebook file / single audio). */
   mediaId?: string;
-  /** Cover / profile image metadata (bytes stay on device in the prototype). */
+  /** Cover / profile image metadata. */
   coverImageName?: string;
   coverImageBytes?: number;
+  /** Uploaded cover media id (durable; replaces device-local paths). */
+  coverImageId?: string;
   chapters?: StudioChapter[];
   episodes?: StudioEpisode[];
   status: StudioDraftStatus;

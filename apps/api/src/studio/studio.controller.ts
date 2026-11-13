@@ -56,6 +56,7 @@ export class StudioController {
       mediaId?: string;
       coverImageName?: string;
       coverImageBytes?: number;
+      coverImageId?: string;
       chapters?: StudioChapter[];
       episodes?: StudioEpisode[];
       submit?: boolean;
@@ -93,6 +94,7 @@ export class StudioController {
       mediaId: body.mediaId,
       coverImageName: body.coverImageName,
       coverImageBytes: body.coverImageBytes,
+      coverImageId: body.coverImageId,
       chapters: body.chapters,
       episodes: body.episodes,
       status: body.submit ? 'submitted' : 'draft',
@@ -125,6 +127,7 @@ export class StudioController {
       mediaId?: string;
       coverImageName?: string;
       coverImageBytes?: number;
+      coverImageId?: string;
       chapters?: StudioChapter[];
       episodes?: StudioEpisode[];
       submit?: boolean;
@@ -145,6 +148,7 @@ export class StudioController {
       mediaId: body.mediaId,
       coverImageName: body.coverImageName,
       coverImageBytes: body.coverImageBytes,
+      coverImageId: body.coverImageId,
       chapters: body.chapters,
       episodes: body.episodes,
       status: body.submit ? 'submitted' : body.submit === false ? 'draft' : undefined,
@@ -182,6 +186,7 @@ export class StudioController {
     prices: PriceByCurrency[];
     mediaName?: string;
     mediaId?: string;
+    coverImageId?: string;
     monetisationMode?: 'purchase' | 'free_with_ads' | 'subscription' | 'premium_purchase';
     subscriptionEligible?: boolean;
     chapters?: StudioChapter[];
@@ -201,6 +206,7 @@ export class StudioController {
       category: draft.genre,
       mediaName: draft.mediaName,
       mediaId: draft.mediaId,
+      coverImageId: draft.coverImageId,
       monetisationMode: draft.monetisationMode,
       subscriptionEligible: draft.subscriptionEligible,
       creatorUid: draft.creatorUid,

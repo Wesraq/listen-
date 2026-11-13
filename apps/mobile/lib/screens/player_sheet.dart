@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -8,6 +6,7 @@ import '../state/session.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ad_break_overlay.dart';
 import '../widgets/content_notes_sheet.dart';
+import '../widgets/title_cover.dart';
 
 Future<void> openPlayerSheet(BuildContext context) {
   return showModalBottomSheet<void>(
@@ -237,10 +236,9 @@ class _AudiobookPlayer extends StatelessWidget {
                 const SizedBox(height: 16),
                 AdBreakOverlay(
                   placement: session.adBreakPlacement ?? 'preroll',
-                  elapsedSec: session.adBreakElapsedSec,
-                  skippable: session.adBreakSkippable,
+                  phase: session.adBreakPhase,
                   onSkip: session.skipAdBreak,
-                  onContinue: () => session.completeAdBreak(skipped: false),
+                  onWatch: session.watchAdBreak,
                 ),
               ],
               const SizedBox(height: 20),
@@ -632,10 +630,9 @@ class _PodcastPlayer extends StatelessWidget {
                 const SizedBox(height: 16),
                 AdBreakOverlay(
                   placement: session.adBreakPlacement ?? 'preroll',
-                  elapsedSec: session.adBreakElapsedSec,
-                  skippable: session.adBreakSkippable,
+                  phase: session.adBreakPhase,
                   onSkip: session.skipAdBreak,
-                  onContinue: () => session.completeAdBreak(skipped: false),
+                  onWatch: session.watchAdBreak,
                 ),
               ],
               const SizedBox(height: 22),
@@ -852,17 +849,6 @@ class _PodcastPlayer extends StatelessWidget {
 }
 
 Widget _cover(SessionState session, TitleItem title) {
-  for (final draft in session.drafts) {
-    if (draft.publishedTitleId != title.id) continue;
-    final path = draft.coverImagePath;
-    if (path != null && path.isNotEmpty && File(path).existsSync()) {
-      return Image.file(File(path), fit: BoxFit.cover);
-    }
-  }
-  return Image.asset(
-    title.imageAsset,
-    fit: BoxFit.cover,
-    errorBuilder: (_, _, _) => Image.asset('assets/images/zambezi.jpg', fit: BoxFit.cover),
-  );
+  return TitleCover(session: session, title: title);
 }
 

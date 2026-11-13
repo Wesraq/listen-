@@ -10,6 +10,7 @@ import 'screens/search_screen.dart';
 import 'screens/studio_screen.dart';
 import 'state/session.dart';
 import 'theme/app_theme.dart';
+import 'widgets/title_cover.dart';
 
 class ListenPlusApp extends StatelessWidget {
   const ListenPlusApp({super.key});
@@ -145,7 +146,12 @@ class _AppShellState extends State<AppShell> {
                       ListTile(
                         leading: ClipRRect(
                           borderRadius: BorderRadius.circular(6),
-                          child: Image.asset(session.nowPlaying!.imageAsset, width: 40, height: 52, fit: BoxFit.cover),
+                          child: TitleCover(
+                            session: session,
+                            title: session.nowPlaying!,
+                            width: 40,
+                            height: 52,
+                          ),
                         ),
                         title: Text(session.nowPlaying!.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                         subtitle: Text(

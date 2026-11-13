@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'firebase_options.dart';
+import 'services/admob_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +17,9 @@ Future<void> main() async {
     debugPrint('Firebase init skipped/failed: $error');
     debugPrintStack(stackTrace: stackTrace);
   }
+
+  // AdMob SDK — test unit IDs by default; swap via --dart-define for production.
+  await AdMobService.instance.initialise();
 
   runApp(const ListenPlusApp());
 }

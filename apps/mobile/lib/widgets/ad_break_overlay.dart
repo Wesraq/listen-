@@ -2,22 +2,23 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Light-touch sponsored break — supports the creator without blocking forever.
+/// Intro / loading surface before an AdMob rewarded interstitial.
+///
+/// Google requires a clear reward message and a skip path before the ad starts.
 class AdBreakOverlay extends StatelessWidget {
   const AdBreakOverlay({
     super.key,
     required this.placement,
-    required this.elapsedSec,
-    required this.skippable,
+    required this.phase,
     required this.onSkip,
-    required this.onContinue,
+    required this.onWatch,
   });
 
   final String placement;
-  final int elapsedSec;
-  final bool skippable;
+  /// intro | loading | showing
+  final String phase;
   final VoidCallback onSkip;
-  final VoidCallback onContinue;
+  final VoidCallback onWatch;
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +27,7 @@ class AdBreakOverlay extends StatelessWidget {
       'chapter' => 'Between chapters',
       _ => 'Before you continue',
     };
-    final remaining = (15 - elapsedSec).clamp(0, 15);
+    final loading = phase == 'loading' || phase == 'showing';
 
     return Container(
       width: double.infinity,
@@ -49,7 +50,9 @@ class AdBreakOverlay extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'A short message that supports this creator.',
+            loading
+                ? 'Loading a short sponsored message…'
+                : 'Watch a short message to support this creator.',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,
@@ -57,7 +60,9 @@ class AdBreakOverlay extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'You can skip after a few seconds, then pick up right where you left off.',
+            loading
+                ? 'Playback resumes automatically when the ad finishes.'
+                : 'Completing the ad credits advertising revenue to this title. You can skip and continue without supporting.',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.58),
               fontSize: 12.5,
@@ -65,46 +70,34 @@ class AdBreakOverlay extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: (elapsedSec / 15).clamp(0.0, 1.0),
-              minHeight: 4,
-              backgroundColor: Colors.white.withValues(alpha: 0.15),
-              color: ListenColors.leaf,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text(
-                skippable ? 'Ready when you are' : 'Skip in ${5 - elapsedSec.clamp(0, 5)}s',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+          if (loading)
+            const ClipRRect(
+              borderRadius: BorderRadius.all(Radius.circular(6)),
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                backgroundColor: Color(0x26FFFFFF),
+                color: ListenColors.leaf,
               ),
-              const Spacer(),
-              if (!skippable)
-                Text(
-                  '${remaining}s',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12),
-                ),
-              if (skippable) ...[
+            )
+          else
+            Row(
+              children: [
                 TextButton(
                   onPressed: onSkip,
                   style: TextButton.styleFrom(foregroundColor: Colors.white70),
                   child: const Text('Skip'),
                 ),
-                const SizedBox(width: 4),
+                const Spacer(),
                 FilledButton(
                   style: FilledButton.styleFrom(
                     backgroundColor: ListenColors.leaf,
                     foregroundColor: Colors.white,
                   ),
-                  onPressed: onContinue,
-                  child: const Text('Continue'),
+                  onPressed: onWatch,
+                  child: const Text('Watch ad'),
                 ),
               ],
-            ],
-          ),
+            ),
         ],
       ),
     );

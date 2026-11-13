@@ -1,20 +1,10 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/catalogue.dart';
 import '../state/session.dart';
 import '../theme/app_theme.dart';
-
-String? _coverPathFor(SessionState session, String titleId) {
-  for (final draft in session.drafts) {
-    if (draft.publishedTitleId != titleId) continue;
-    final path = draft.coverImagePath;
-    if (path != null && path.isNotEmpty && File(path).existsSync()) return path;
-  }
-  return null;
-}
+import 'title_cover.dart';
 
 class TitleCard extends StatelessWidget {
   const TitleCard({super.key, required this.title, required this.onOpen});
@@ -40,19 +30,7 @@ class TitleCard extends StatelessWidget {
                   clipBehavior: Clip.antiAlias,
                   child: InkWell(
                     onTap: onOpen,
-                    child: _coverPathFor(session, title.id) != null
-                        ? Image.file(
-                            File(_coverPathFor(session, title.id)!),
-                            fit: BoxFit.cover,
-                          )
-                        : Image.asset(
-                            title.imageAsset,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Image.asset(
-                              'assets/images/zambezi.jpg',
-                              fit: BoxFit.cover,
-                            ),
-                          ),
+                    child: TitleCover(session: session, title: title),
                   ),
                 ),
               ),

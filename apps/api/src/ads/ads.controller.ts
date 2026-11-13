@@ -1,4 +1,4 @@
-import { Body, Controller, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Post, Query, UseGuards } from '@nestjs/common';
 
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -6,12 +6,12 @@ import { AuthUser } from '../auth/auth.types';
 import { AdsService } from './ads.service';
 
 @Controller('ads')
-@UseGuards(AuthGuard)
 export class AdsController {
   constructor(@Inject(AdsService) private readonly ads: AdsService) {}
 
-  /** Record a verified completed ad event (prototype inventory). */
+  /** Record a client-reported AdMob reward (paired with SSV when configured). */
   @Post('complete')
+  @UseGuards(AuthGuard)
   complete(
     @CurrentUser() user: AuthUser,
     @Body()
@@ -20,6 +20,8 @@ export class AdsController {
       placement?: 'preroll' | 'midroll';
       completedSec?: number;
       trackId?: string;
+      source?: string;
+      rewardEarned?: boolean;
     },
   ) {
     return this.ads.complete({
@@ -28,6 +30,23 @@ export class AdsController {
       placement: body.placement ?? 'preroll',
       completedSec: body.completedSec ?? 0,
       trackId: body.trackId,
+      source: body.source ?? 'admob',
+      rewardEarned: body.rewardEarned === true,
     });
+  }
+
+  /**
+   * AdMob Server-Side Verification callback (no auth — signed by Google).
+   * Set in AdMob console → ad unit → Server-side verification URL:
+   *   https://<api-host>/v1/ads/ssv
+   */
+  @Get('ssv')
+  ssvGet(@Query() query: Record<string, string>) {
+    return this.ads.ssv(query);
+  }
+
+  @Post('ssv')
+  ssvPost(@Query() query: Record<string, string>, @Body() body: Record<string, string>) {
+    return this.ads.ssv({ ...body, ...query });
   }
 }

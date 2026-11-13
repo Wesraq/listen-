@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../data/catalogue.dart';
 import '../data/content_models.dart';
 import '../data/session_store.dart';
+import '../services/admob_service.dart';
 import '../services/api_client.dart';
 import '../services/audio_playback_service.dart';
 import '../services/auth_service.dart';
@@ -83,19 +84,24 @@ class SessionState extends ChangeNotifier {
   /// Strategic ad break state (free-with-ads titles only).
   bool adBreakActive = false;
   String? adBreakPlacement; // preroll | midroll | chapter
+  /// intro | loading | showing
+  String adBreakPhase = 'intro';
+  bool adBreakSkippable = true;
+  /// Kept for overlay callers that still read elapsed; AdMob owns the real spot.
   int adBreakElapsedSec = 0;
-  bool adBreakSkippable = false;
-  Timer? _adBreakTicker;
   final Set<String> _prerollShownForSession = {};
   final Set<String> _midrollShownForTrack = {};
   final List<int> _adCompletionTimesMs = [];
   double _qualifiedListenAccumSec = 0;
   final Map<String, int> _readerMinutesCredited = {};
+  bool _adWatchInFlight = false;
 
   bool get isSignedIn => authMode == AuthMode.signedIn;
   bool get isGuest => authMode == AuthMode.guest;
   bool get firebaseAuthAvailable => _auth.isAvailable;
   String get marketChip => '$marketLabel · $currencyCode';
+  String mediaAbsoluteUrl(String relativeOrAbsolute) =>
+      _api.absoluteMediaUrl(relativeOrAbsolute);
   String get avatarLetters {
     final parts = displayName.trim().split(RegExp(r'\s+'));
     if (parts.isEmpty || parts.first.isEmpty) return 'LP';
@@ -210,11 +216,29 @@ class SessionState extends ChangeNotifier {
     }
     _mergeLiveDraftsIntoCatalogue();
     _ensureCreatorOwnsLiveTitles();
+    unawaited(_backfillCoverUploads());
 
     ready = true;
     notifyListeners();
     await _persist();
     _ensureSyncRetry();
+  }
+
+  /// Upload any local covers that never made it to durable media storage.
+  Future<void> _backfillCoverUploads() async {
+    if (!isSignedIn) return;
+    final needsUpload = drafts.where((d) {
+      final path = d.coverImagePath;
+      final id = d.coverImageId;
+      return path != null &&
+          path.isNotEmpty &&
+          File(path).existsSync() &&
+          (id == null || id.isEmpty) &&
+          !d.id.startsWith('local-');
+    }).toList();
+    for (final draft in needsUpload) {
+      await _pushDraftToApi(draft, wantsSubmit: false);
+    }
   }
 
   String? _devBearer() {
@@ -229,8 +253,18 @@ class SessionState extends ChangeNotifier {
   /// Prefer Firebase ID token (including silent device-guest sessions used for
   /// free media signing). Fall back to local `uid|email|name` for hybrid AUTH_MODE.
   Future<String?> _apiBearer({bool forceRefresh = false}) async {
+    if (!forceRefresh &&
+        _cachedBearer != null &&
+        _cachedBearerAt != null &&
+        DateTime.now().difference(_cachedBearerAt!) < const Duration(minutes: 45)) {
+      return _cachedBearer;
+    }
     final idToken = await _auth.idToken(forceRefresh: forceRefresh);
-    if (idToken != null && idToken.isNotEmpty) return idToken;
+    if (idToken != null && idToken.isNotEmpty) {
+      _cachedBearer = idToken;
+      _cachedBearerAt = DateTime.now();
+      return idToken;
+    }
     if (!isSignedIn || uid == null || uid!.isEmpty) return null;
     return _devBearer();
   }
@@ -243,10 +277,28 @@ class SessionState extends ChangeNotifier {
     if (rest is FirebaseRestAuthService) {
       try {
         await rest.ensureDeviceSession();
+        _cachedBearer = null;
+        _cachedBearerAt = null;
       } catch (_) {
         // Playback may still work for unsigned free media after API deploy.
       }
     }
+  }
+
+  Future<String?> _signedMediaUrlCached(String mediaUrl) async {
+    final id = _api.mediaIdFromUrl(mediaUrl) ?? mediaUrl;
+    final cached = _signedMediaCache[id];
+    if (cached != null &&
+        DateTime.now().difference(cached.at) < const Duration(minutes: 45)) {
+      return cached.url;
+    }
+    await _ensureMediaAuth();
+    final bearer = await _apiBearer();
+    if (bearer == null) return mediaUrl;
+    final signed = await _api.signedMediaUrl(bearer, mediaUrl);
+    if (signed == null || signed.isEmpty) return mediaUrl;
+    _signedMediaCache[id] = (url: signed, at: DateTime.now());
+    return signed;
   }
 
   Future<void> _syncCatalogueFromApi() async {
@@ -399,22 +451,63 @@ class SessionState extends ChangeNotifier {
     }
   }
 
+  /// In-flight / recent parts pulls — avoids duplicate Cloud Run round-trips on open.
+  final Map<String, Future<void>> _partsRefreshInFlight = {};
+  final Map<String, DateTime> _partsRefreshedAt = {};
+  String? _cachedBearer;
+  DateTime? _cachedBearerAt;
+  final Map<String, ({String url, DateTime at})> _signedMediaCache = {};
+
   /// Fetch latest chapters/tracks from API (and merge any live Studio draft).
-  Future<void> refreshTitleParts(String titleId, {bool notify = true}) async {
+  Future<void> refreshTitleParts(
+    String titleId, {
+    bool notify = true,
+    bool force = false,
+  }) async {
+    final recent = _partsRefreshedAt[titleId];
+    if (!force &&
+        recent != null &&
+        DateTime.now().difference(recent) < const Duration(seconds: 45) &&
+        (tracksFor(titleId).isNotEmpty || chaptersFor(titleId).isNotEmpty)) {
+      for (final draft in drafts) {
+        if (draft.publishedTitleId == titleId) overlayDraftParts(draft);
+      }
+      return;
+    }
+
+    final existing = _partsRefreshInFlight[titleId];
+    if (existing != null) {
+      await existing;
+      return;
+    }
+
+    final future = _refreshTitlePartsBody(titleId, notify: notify);
+    _partsRefreshInFlight[titleId] = future;
+    try {
+      await future;
+    } finally {
+      _partsRefreshInFlight.remove(titleId);
+    }
+  }
+
+  Future<void> _refreshTitlePartsBody(String titleId, {required bool notify}) async {
     final title = titleById(titleId);
     final wantsAudio = title?.isAudio ?? true;
     final wantsEbook = title?.isEbook ?? !(title?.isAudio ?? false);
-    if (wantsAudio) {
-      final tracks = await _api.fetchTracks(titleId);
-      if (tracks != null && tracks.isNotEmpty) {
-        putRemoteTracks(titleId, tracks);
-      }
+
+    // Parallel Cloud Run calls — was serial and felt like a double delay.
+    final results = await Future.wait<Object?>([
+      wantsAudio ? _api.fetchTracks(titleId) : Future<List<SampleAudioTrack>?>.value(null),
+      wantsEbook ? _api.fetchChapters(titleId) : Future<List<SampleChapter>?>.value(null),
+    ]);
+    final tracks = results[0] as List<SampleAudioTrack>?;
+    final chapters = results[1] as List<SampleChapter>?;
+
+    if (tracks != null && tracks.isNotEmpty) {
+      putRemoteTracks(titleId, tracks);
     }
-    if (wantsEbook) {
-      final chapters = await _api.fetchChapters(titleId);
-      if (chapters != null && chapters.isNotEmpty) {
-        putRemoteChapters(titleId, chapters);
-      }
+    if (chapters != null && chapters.isNotEmpty) {
+      putRemoteChapters(titleId, chapters);
     }
     for (final draft in drafts) {
       if (draft.publishedTitleId == titleId) {
@@ -422,6 +515,7 @@ class SessionState extends ChangeNotifier {
         overlayDraftParts(draft);
       }
     }
+    _partsRefreshedAt[titleId] = DateTime.now();
     if (notify) notifyListeners();
   }
 
@@ -446,6 +540,7 @@ class SessionState extends ChangeNotifier {
       coverImageName: draft.coverImageName,
       coverImagePath: draft.coverImagePath,
       coverImageBytes: draft.coverImageBytes,
+      coverImageId: draft.coverImageId,
       chapters: chapters ?? draft.chapters,
       episodes: episodes ?? draft.episodes,
       submit: null,
@@ -691,6 +786,9 @@ class SessionState extends ChangeNotifier {
     contact = '';
     creatorState = CreatorApplicationState.newApplicant;
     drafts.clear();
+    _cachedBearer = null;
+    _cachedBearerAt = null;
+    _signedMediaCache.clear();
     notifyListeners();
     await _persist();
     await _ensureMediaAuth();
@@ -829,6 +927,7 @@ class SessionState extends ChangeNotifier {
           mediaId: draft.mediaId,
           coverImageName: draft.coverImageName,
           coverImageBytes: draft.coverImageBytes,
+          coverImageId: draft.coverImageId,
           chapters: draft.chapters,
           episodes: draft.episodes,
           submit: draft.status == 'submitted',
@@ -856,6 +955,7 @@ class SessionState extends ChangeNotifier {
               coverImageName: draft.coverImageName,
               coverImagePath: draft.coverImagePath,
               coverImageBytes: draft.coverImageBytes,
+              coverImageId: draft.coverImageId ?? remote.coverImageId,
               chapters: draft.chapters,
               episodes: draft.episodes,
               publishedTitleId: remote.publishedTitleId ?? draft.publishedTitleId,
@@ -946,6 +1046,7 @@ class SessionState extends ChangeNotifier {
           coverImageName: draft.coverImageName ?? local?.coverImageName,
           coverImagePath: local?.coverImagePath,
           coverImageBytes: draft.coverImageBytes ?? local?.coverImageBytes,
+          coverImageId: draft.coverImageId ?? local?.coverImageId,
           chapters: draft.chapters.isNotEmpty ? draft.chapters : local?.chapters,
           episodes: _mergeEpisodeLocalPaths(
             draft.episodes.isNotEmpty ? draft.episodes : (local?.episodes ?? const []),
@@ -1189,6 +1290,7 @@ class SessionState extends ChangeNotifier {
     String? coverImageName,
     String? coverImagePath,
     int? coverImageBytes,
+    String? coverImageId,
     List<ContentChapter>? chapters,
     List<ContentEpisode>? episodes,
     bool? submit,
@@ -1204,6 +1306,10 @@ class SessionState extends ChangeNotifier {
         ? 'live'
         : (submit == false ? 'draft' : (existing?.status == 'submitted' ? 'draft' : (existing?.status ?? 'draft')));
 
+    // Re-upload cover when the local file changes relative to a prior media id.
+    final coverChanged = coverImagePath != null &&
+        coverImagePath.isNotEmpty &&
+        coverImagePath != existing?.coverImagePath;
     final local = CreatorDraft(
       id: existing?.id ?? 'local-${DateTime.now().millisecondsSinceEpoch}',
       title: title.trim(),
@@ -1225,6 +1331,7 @@ class SessionState extends ChangeNotifier {
       coverImageName: coverImageName,
       coverImagePath: coverImagePath,
       coverImageBytes: coverImageBytes,
+      coverImageId: coverChanged ? null : (coverImageId ?? existing?.coverImageId),
       chapters: nextChapters,
       episodes: nextEpisodes,
       publishedTitleId: existing?.publishedTitleId,
@@ -1291,6 +1398,7 @@ class SessionState extends ChangeNotifier {
 
     var preparedEpisodes = draft.episodes;
     var preparedMediaId = draft.mediaId;
+    var preparedCoverId = draft.coverImageId;
 
     final uploaded = <ContentEpisode>[];
     for (final episode in draft.episodes) {
@@ -1308,6 +1416,17 @@ class SessionState extends ChangeNotifier {
       uploaded.add(id == null ? episode : episode.copyWith(mediaId: id));
     }
     preparedEpisodes = uploaded;
+
+    final coverPath = draft.coverImagePath;
+    if (coverPath != null &&
+        File(coverPath).existsSync() &&
+        (preparedCoverId == null || preparedCoverId.isEmpty)) {
+      preparedCoverId = await _api.uploadMedia(
+        bearer,
+        filePath: coverPath,
+        filename: draft.coverImageName,
+      );
+    }
 
     final mediaPath = draft.mediaPath;
     if (mediaPath != null && File(mediaPath).existsSync()) {
@@ -1352,6 +1471,7 @@ class SessionState extends ChangeNotifier {
         mediaId: preparedMediaId,
         coverImageName: draft.coverImageName,
         coverImageBytes: draft.coverImageBytes,
+        coverImageId: preparedCoverId,
         chapters: draft.chapters,
         episodes: preparedEpisodes,
         submit: submitFlag,
@@ -1373,6 +1493,7 @@ class SessionState extends ChangeNotifier {
       mediaId: preparedMediaId,
       coverImageName: draft.coverImageName,
       coverImageBytes: draft.coverImageBytes,
+      coverImageId: preparedCoverId,
       chapters: draft.chapters,
       episodes: preparedEpisodes,
       submit: wantsSubmit,
@@ -1399,6 +1520,7 @@ class SessionState extends ChangeNotifier {
       coverImageName: draft.coverImageName ?? remote.coverImageName,
       coverImagePath: draft.coverImagePath,
       coverImageBytes: draft.coverImageBytes ?? remote.coverImageBytes,
+      coverImageId: preparedCoverId ?? remote.coverImageId,
       chapters: remote.chapters.isNotEmpty ? remote.chapters : draft.chapters,
       episodes: _mergeEpisodeLocalPaths(
         remote.episodes.isNotEmpty ? remote.episodes : preparedEpisodes,
@@ -1676,11 +1798,12 @@ class SessionState extends ChangeNotifier {
   Future<void> stopPlayback() async {
     _syncAudioProgress(persist: true);
     _stopTicker();
-    _stopAdBreakTicker();
     adBreakActive = false;
     adBreakPlacement = null;
+    adBreakPhase = 'intro';
     adBreakElapsedSec = 0;
-    adBreakSkippable = false;
+    adBreakSkippable = true;
+    _adWatchInFlight = false;
     _sleepTimer?.cancel();
     _sleepTimer = null;
     sleepTimerMinutesRemaining = null;
@@ -1702,48 +1825,77 @@ class SessionState extends ChangeNotifier {
     return (3 - _adCompletionTimesMs.length).clamp(0, 3);
   }
 
-  void _stopAdBreakTicker() {
-    _adBreakTicker?.cancel();
-    _adBreakTicker = null;
-  }
-
   void _startAdBreak({required String placement}) {
-    _stopAdBreakTicker();
     adBreakActive = true;
     adBreakPlacement = placement;
+    adBreakPhase = 'intro';
     adBreakElapsedSec = 0;
-    adBreakSkippable = false;
+    adBreakSkippable = true;
+    _adWatchInFlight = false;
     playing = false;
     if (usingRealAudio) {
       _audio.pause();
     } else {
       _stopTicker();
     }
+    // Warm AdMob while the intro is on screen.
+    unawaited(AdMobService.instance.preload());
     notifyListeners();
-    _adBreakTicker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!adBreakActive) return;
-      adBreakElapsedSec += 1;
-      if (adBreakElapsedSec >= 5) adBreakSkippable = true;
-      // Soft cap at 15s prototype spot; auto-complete.
-      if (adBreakElapsedSec >= 15) {
-        completeAdBreak(skipped: false);
-        return;
-      }
-      notifyListeners();
-    });
   }
 
-  Future<void> completeAdBreak({required bool skipped}) async {
+  /// User accepted the intro — show a real AdMob rewarded interstitial.
+  Future<void> watchAdBreak() async {
+    if (!adBreakActive || _adWatchInFlight) return;
+    if (adBreakPhase != 'intro') return;
+    _adWatchInFlight = true;
+    adBreakPhase = 'loading';
+    adBreakSkippable = false;
+    notifyListeners();
+
+    final title = nowPlaying;
+    final placement = adBreakPlacement ?? 'preroll';
+    final result = await AdMobService.instance.showRewardedInterstitial(
+      userId: uid,
+      customData: [
+        title?.id ?? '',
+        placement == 'chapter' ? 'midroll' : placement,
+        uid ?? 'guest',
+      ].join('|'),
+    );
+    if (!adBreakActive) {
+      _adWatchInFlight = false;
+      return;
+    }
+
+    adBreakPhase = 'showing';
+    notifyListeners();
+    _adWatchInFlight = false;
+
+    switch (result) {
+      case AdShowResult.rewarded:
+        await completeAdBreak(skipped: false, rewarded: true);
+      case AdShowResult.skipped:
+        await completeAdBreak(skipped: true, rewarded: false);
+      case AdShowResult.failed:
+        showNotice('Ad unavailable — continuing without interruption.');
+        await completeAdBreak(skipped: true, rewarded: false);
+    }
+  }
+
+  Future<void> completeAdBreak({
+    required bool skipped,
+    bool rewarded = false,
+  }) async {
     if (!adBreakActive) return;
     final title = nowPlaying;
     final track = nowPlayingTrack;
     final placement = adBreakPlacement ?? 'preroll';
-    final watched = adBreakElapsedSec;
-    _stopAdBreakTicker();
     adBreakActive = false;
     adBreakPlacement = null;
-    adBreakSkippable = false;
+    adBreakPhase = 'intro';
+    adBreakSkippable = true;
     adBreakElapsedSec = 0;
+    _adWatchInFlight = false;
 
     if (title != null && track != null) {
       if (placement == 'preroll') {
@@ -1754,8 +1906,8 @@ class SessionState extends ChangeNotifier {
     }
 
     final bearer = await _apiBearer();
-    if (!skipped &&
-        watched >= 5 &&
+    if (rewarded &&
+        !skipped &&
         title != null &&
         title.showsAds &&
         bearer != null &&
@@ -1764,8 +1916,10 @@ class SessionState extends ChangeNotifier {
         bearer,
         titleId: title.id,
         placement: placement == 'chapter' ? 'midroll' : placement,
-        completedSec: watched,
+        completedSec: 30,
         trackId: track?.id,
+        source: 'admob',
+        rewardEarned: true,
       );
       if (ok) {
         _adCompletionTimesMs.add(DateTime.now().millisecondsSinceEpoch);
@@ -1791,8 +1945,7 @@ class SessionState extends ChangeNotifier {
 
   Future<void> skipAdBreak() async {
     if (!adBreakActive || !adBreakSkippable) return;
-    // Still monetise if they watched the minimum 5s before skip.
-    await completeAdBreak(skipped: adBreakElapsedSec < 5);
+    await completeAdBreak(skipped: true, rewarded: false);
   }
 
   /// Reader interstitial between chapters for free-with-ads ebooks (max 1/session).
@@ -1970,9 +2123,7 @@ class SessionState extends ChangeNotifier {
 
     var remote = title.mediaUrl;
     if (remote != null && remote.isNotEmpty && (title.isPdfEbook || preferPdf)) {
-      await _ensureMediaAuth();
-      final bearer = await _apiBearer();
-      remote = await _api.signedMediaUrl(bearer, remote) ?? remote;
+      remote = await _signedMediaUrlCached(remote) ?? remote;
       final name = title.mediaName ?? '${title.id}.pdf';
       final cached = await _cacheRemoteEbookPdf(
         titleId: title.id,
@@ -2091,10 +2242,8 @@ class SessionState extends ChangeNotifier {
 
     final localPath = await _mediaPathForPlayingTitle();
     var mediaUrl = _mediaUrlForPlayingTitle();
-    await _ensureMediaAuth();
-    final bearer = await _apiBearer();
     if (mediaUrl != null && mediaUrl.isNotEmpty) {
-      mediaUrl = await _api.signedMediaUrl(bearer, mediaUrl) ?? mediaUrl;
+      mediaUrl = await _signedMediaUrlCached(mediaUrl) ?? mediaUrl;
     }
     final ok = await _audio.load(
       duration: Duration(seconds: nowPlayingTrack?.durationSec ?? 8),
@@ -2217,6 +2366,7 @@ class SessionState extends ChangeNotifier {
         mediaId: drafts[i].mediaId,
         coverImageName: drafts[i].coverImageName,
         coverImageBytes: drafts[i].coverImageBytes,
+        coverImageId: drafts[i].coverImageId,
         chapters: drafts[i].chapters,
         episodes: drafts[i].episodes,
       );
@@ -2297,7 +2447,6 @@ class SessionState extends ChangeNotifier {
   @override
   void dispose() {
     _playbackTicker?.cancel();
-    _adBreakTicker?.cancel();
     _sleepTimer?.cancel();
     _syncRetryTimer?.cancel();
     _audioPositionSub?.cancel();
