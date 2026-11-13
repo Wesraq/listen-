@@ -146,10 +146,61 @@ export class MediaStore implements OnModuleInit {
     return meta;
   }
 
+  /** Resolve meta from memory, Firestore, or by probing Storage under media/{id}/. */
+  async ensureMeta(id: string): Promise<MediaMeta> {
+    const cached = this.items.get(id);
+    if (cached) return cached;
+
+    if (this.useCloud && this.fs.enabled) {
+      try {
+        const row = await this.fs.get<{ payload?: MediaMeta } & Partial<MediaMeta>>('media', id);
+        if (row) {
+          const meta = ((row.payload ?? row) as MediaMeta);
+          if (meta?.id) {
+            this.items.set(meta.id, meta);
+            return meta;
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Firestore media lookup failed for ${id}: ${error}`);
+      }
+    }
+
+    if (this.useCloud && this.storageBucket) {
+      try {
+        const admin = await getFirebaseAdmin();
+        if (admin) {
+          const bucket = admin.storage().bucket(this.storageBucket);
+          const [files] = await bucket.getFiles({ prefix: `media/${id}/`, maxResults: 5 });
+          if (files.length > 0) {
+            const file = files[0];
+            const [metadata] = await file.getMetadata();
+            const meta: MediaMeta = {
+              id,
+              originalName: file.name.split('/').pop() || `${id}.bin`,
+              mimeType: (metadata.contentType as string) || 'application/octet-stream',
+              bytes: Number(metadata.size ?? 0) || 0,
+              createdAt: (metadata.timeCreated as string) || new Date().toISOString(),
+              storagePath: file.name,
+              creatorUid: (metadata.metadata?.creatorUid as string) || undefined,
+            };
+            await this.persistMeta(meta);
+            this.logger.log(`Recovered media meta for ${id} from Storage path ${file.name}`);
+            return meta;
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Storage probe failed for ${id}: ${error}`);
+      }
+    }
+
+    throw new NotFoundException(`Media ${id} not found`);
+  }
+
   async open(
     id: string,
   ): Promise<{ meta: MediaMeta; stream: Readable; absolutePath?: string }> {
-    const meta = this.getMeta(id);
+    const meta = await this.ensureMeta(id);
 
     if (meta.storagePath && this.storageBucket) {
       const admin = await getFirebaseAdmin();

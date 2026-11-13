@@ -377,14 +377,31 @@ class ListenApiClient {
   }
 
   /// Mint a short-lived signed media URL (required on Cloud Run).
-  Future<String?> signedMediaUrl(String bearerToken, String mediaIdOrUrl) async {
+  /// Falls back to `/sign-free` for free catalogue titles when unauthenticated
+  /// or when the entitled sign call fails.
+  Future<String?> signedMediaUrl(String? bearerToken, String mediaIdOrUrl) async {
     final id = mediaIdFromUrl(mediaIdOrUrl) ?? mediaIdOrUrl;
     if (id.isEmpty) return null;
+    if (bearerToken != null && bearerToken.isNotEmpty) {
+      final authed = await _signMedia(id, bearerToken: bearerToken);
+      if (authed != null) return authed;
+    }
+    return _signMedia(id, free: true);
+  }
+
+  Future<String?> _signMedia(
+    String id, {
+    String? bearerToken,
+    bool free = false,
+  }) async {
     try {
       final response = await _client
           .post(
-            _uri('/media/$id/sign'),
-            headers: {'Authorization': 'Bearer $bearerToken'},
+            _uri(free ? '/media/$id/sign-free' : '/media/$id/sign'),
+            headers: {
+              if (bearerToken != null && bearerToken.isNotEmpty)
+                'Authorization': 'Bearer $bearerToken',
+            },
           )
           .timeout(const Duration(seconds: 8));
       if (response.statusCode < 200 || response.statusCode >= 300) return null;

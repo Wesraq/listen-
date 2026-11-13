@@ -19,6 +19,19 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Keep plugin modules on compileSdk 36 so AAR metadata checks pass with newer lifecycle plugins.
+// evaluationDependsOn(":app") can evaluate subprojects early, so handle both cases.
+subprojects {
+    fun bumpCompileSdk() {
+        extensions.findByType<com.android.build.gradle.BaseExtension>()?.compileSdkVersion(36)
+    }
+    if (state.executed) {
+        bumpCompileSdk()
+    } else {
+        afterEvaluate { bumpCompileSdk() }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

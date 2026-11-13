@@ -77,15 +77,30 @@ export class MediaController {
   /** Issue a short-lived signed URL — creator or entitled listener only. */
   @Post(':id/sign')
   @UseGuards(AuthGuard)
-  sign(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    this.assertCanAccessMedia(user, id);
+  async sign(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.assertCanAccessMedia(user, id);
     const signed = this.signing.sign(id);
     return { id, ...signed, requester: user.uid };
   }
 
   /**
+   * Public sign for free / free-with-ads catalogue media (guest playback).
+   * Paid titles still require a normal authenticated `/sign`.
+   */
+  @Post(':id/sign-free')
+  async signFree(@Param('id') id: string) {
+    if (!this.isFreeMedia(id)) {
+      throw new ForbiddenException('Only free titles can be signed without auth');
+    }
+    // Ensure the object exists (recovers Storage-only uploads).
+    await this.media.ensureMeta(id);
+    const signed = this.signing.sign(id);
+    return { id, ...signed, requester: 'guest' };
+  }
+
+  /**
    * Stream uploaded media. Requires a valid signature when signing is enabled
-   * (default on Cloud Run). Entitlement is enforced when minting signatures.
+   * (default on Cloud Run). Free catalogue media may stream without a signature.
    */
   @Get(':id')
   async stream(
@@ -95,12 +110,15 @@ export class MediaController {
     @Headers('authorization') authorization: string | undefined,
     @Res() res: Response,
   ) {
-    this.signing.assertValid(id, exp, sig);
-
-    // When signing is off (local LAN), still require auth + entitlement.
-    if (!this.signing.requireSigned()) {
+    const free = this.isFreeMedia(id);
+    if (this.signing.requireSigned()) {
+      if (!free) {
+        this.signing.assertValid(id, exp, sig);
+      }
+    } else {
+      // When signing is off (local LAN), still require auth + entitlement.
       const user = await this.auth.resolveUser(authorization);
-      this.assertCanAccessMedia(user, id);
+      await this.assertCanAccessMedia(user, id);
     }
 
     const { meta, stream } = await this.media.open(id);
@@ -113,7 +131,7 @@ export class MediaController {
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(meta.originalName)}"`,
     );
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Cache-Control', free ? 'public, max-age=300' : 'private, max-age=300');
     stream.on('error', () => {
       if (!res.headersSent) {
         res.status(404).json({ message: 'Media file missing' });
@@ -124,22 +142,32 @@ export class MediaController {
     stream.pipe(res);
   }
 
-  private assertCanAccessMedia(user: AuthUser, mediaId: string) {
-    const meta = this.media.getMeta(mediaId);
+  private isFreeMedia(mediaId: string): boolean {
+    const titleId = this.catalogue.findTitleIdByMediaId(mediaId);
+    if (!titleId) return false;
+    try {
+      const title = this.catalogue.getTitle(titleId);
+      return title.priceMinor === 0 || title.monetisationMode === 'free_with_ads';
+    } catch {
+      return false;
+    }
+  }
+
+  private async assertCanAccessMedia(user: AuthUser, mediaId: string) {
+    const titleId = this.catalogue.findTitleIdByMediaId(mediaId);
+    if (titleId) {
+      const entitlement = this.library.entitlement(user.uid, titleId);
+      if (entitlement.entitled) return;
+      throw new ForbiddenException('Not entitled to this media');
+    }
+
+    const meta = await this.media.ensureMeta(mediaId);
     if (meta.creatorUid && meta.creatorUid === user.uid) return;
 
-    const titleId = this.catalogue.findTitleIdByMediaId(mediaId);
-    if (!titleId) {
-      // Orphan upload: only the creator (or no creatorUid → deny on cloud).
-      if (!meta.creatorUid) {
-        throw new ForbiddenException('Media is not linked to an entitled title');
-      }
-      throw new ForbiddenException('Not entitled to this media');
+    // Orphan upload: only the creator (or no creatorUid → deny on cloud).
+    if (!meta.creatorUid) {
+      throw new ForbiddenException('Media is not linked to an entitled title');
     }
-
-    const entitlement = this.library.entitlement(user.uid, titleId);
-    if (!entitlement.entitled) {
-      throw new ForbiddenException('Not entitled to this media');
-    }
+    throw new ForbiddenException('Not entitled to this media');
   }
 }

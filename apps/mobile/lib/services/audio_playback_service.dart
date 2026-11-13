@@ -50,6 +50,7 @@ class AudioPlaybackService {
         localPath.isNotEmpty &&
         File(localPath).existsSync();
 
+    final wantsRemote = mediaUrl != null && mediaUrl.isNotEmpty;
     try {
       if (hasLocal) {
         await _player.setFilePath(localPath);
@@ -57,17 +58,25 @@ class AudioPlaybackService {
         usingSampleAsset = false;
         return true;
       }
-      if (mediaUrl != null && mediaUrl.isNotEmpty) {
+      if (wantsRemote) {
         await _player.setUrl(mediaUrl);
         usingRealAudio = true;
         usingSampleAsset = false;
         return true;
       }
+      // Only use the bundled clip when the title has no uploaded media at all.
       await _player.setAsset(_sampleAsset);
       usingRealAudio = true;
       usingSampleAsset = true;
       return true;
     } catch (_) {
+      // Never mask a failed remote/local load with the demo clip — that is how
+      // guests were hearing sample audio instead of catalogue content.
+      if (hasLocal || wantsRemote) {
+        usingRealAudio = false;
+        usingSampleAsset = false;
+        return false;
+      }
       try {
         await _player.setAsset(_sampleAsset);
         usingRealAudio = true;

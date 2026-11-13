@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 
+import 'firebase_rest_auth.dart';
+
 class AuthException implements Exception {
   AuthException(this.message);
   final String message;
@@ -243,6 +245,7 @@ class FirebaseAuthService implements AuthService {
 }
 
 AuthService createDefaultAuthService() {
-  if (Firebase.apps.isEmpty) return NoopAuthService();
-  return FirebaseAuthService();
+  if (Firebase.apps.isNotEmpty) return FirebaseAuthService();
+  // Android APK builds currently lack google-services.json — use Identity Toolkit REST.
+  return FirebaseRestAuthService();
 }

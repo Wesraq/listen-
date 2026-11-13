@@ -15,8 +15,10 @@ class DefaultFirebaseOptions {
       case TargetPlatform.macOS:
         return ios;
       case TargetPlatform.android:
+        // Native Android Firebase options require google-services.json.
+        // The app falls back to Identity Toolkit REST auth on Android.
         throw UnsupportedError(
-          'Firebase Android is not configured yet. Add google-services.json from the Firebase console.',
+          'Firebase Android native options are not configured yet; using REST auth.',
         );
       default:
         throw UnsupportedError('Firebase is not configured for this platform yet.');

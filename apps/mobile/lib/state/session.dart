@@ -10,6 +10,7 @@ import '../data/session_store.dart';
 import '../services/api_client.dart';
 import '../services/audio_playback_service.dart';
 import '../services/auth_service.dart';
+import '../services/firebase_rest_auth.dart';
 import '../services/offline_cache_service.dart';
 
 enum CreatorApplicationState { newApplicant, pending, approved }
@@ -204,6 +205,8 @@ class SessionState extends ChangeNotifier {
       await _syncSalesFromApi();
       await _syncDraftsFromApi();
       await _syncNotesFromApi();
+    } else {
+      await _ensureMediaAuth();
     }
     _mergeLiveDraftsIntoCatalogue();
     _ensureCreatorOwnsLiveTitles();
@@ -223,12 +226,27 @@ class SessionState extends ChangeNotifier {
     return uid;
   }
 
-  /// Prefer Firebase ID token; fall back to local `uid|email|name` for hybrid AUTH_MODE.
+  /// Prefer Firebase ID token (including silent device-guest sessions used for
+  /// free media signing). Fall back to local `uid|email|name` for hybrid AUTH_MODE.
   Future<String?> _apiBearer({bool forceRefresh = false}) async {
-    if (!isSignedIn || uid == null || uid!.isEmpty) return null;
     final idToken = await _auth.idToken(forceRefresh: forceRefresh);
     if (idToken != null && idToken.isNotEmpty) return idToken;
+    if (!isSignedIn || uid == null || uid!.isEmpty) return null;
     return _devBearer();
+  }
+
+  /// Guests still need a Firebase ID token to mint signed media URLs on Cloud Run.
+  Future<void> _ensureMediaAuth() async {
+    final existing = await _auth.idToken();
+    if (existing != null && existing.isNotEmpty) return;
+    final rest = _auth;
+    if (rest is FirebaseRestAuthService) {
+      try {
+        await rest.ensureDeviceSession();
+      } catch (_) {
+        // Playback may still work for unsigned free media after API deploy.
+      }
+    }
   }
 
   Future<void> _syncCatalogueFromApi() async {
@@ -580,6 +598,7 @@ class SessionState extends ChangeNotifier {
     contact = '';
     notifyListeners();
     _persist();
+    unawaited(_ensureMediaAuth());
   }
 
   Future<void> createAccountWithEmail({
@@ -674,6 +693,7 @@ class SessionState extends ChangeNotifier {
     drafts.clear();
     notifyListeners();
     await _persist();
+    await _ensureMediaAuth();
     if (showMessage) {
       showNotice('Signed out.');
     }
@@ -1950,10 +1970,9 @@ class SessionState extends ChangeNotifier {
 
     var remote = title.mediaUrl;
     if (remote != null && remote.isNotEmpty && (title.isPdfEbook || preferPdf)) {
+      await _ensureMediaAuth();
       final bearer = await _apiBearer();
-      if (bearer != null) {
-        remote = await _api.signedMediaUrl(bearer, remote) ?? remote;
-      }
+      remote = await _api.signedMediaUrl(bearer, remote) ?? remote;
       final name = title.mediaName ?? '${title.id}.pdf';
       final cached = await _cacheRemoteEbookPdf(
         titleId: title.id,
@@ -2040,7 +2059,11 @@ class SessionState extends ChangeNotifier {
       return track.mediaUrl;
     }
     final title = nowPlaying;
-    if (title == null || track == null) return null;
+    if (title == null) return null;
+    if (title.mediaUrl != null && title.mediaUrl!.isNotEmpty) {
+      return title.mediaUrl;
+    }
+    if (track == null) return null;
     for (final draft in drafts) {
       if (draft.publishedTitleId != title.id) continue;
       final episodes = [...draft.episodes]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
@@ -2068,8 +2091,9 @@ class SessionState extends ChangeNotifier {
 
     final localPath = await _mediaPathForPlayingTitle();
     var mediaUrl = _mediaUrlForPlayingTitle();
+    await _ensureMediaAuth();
     final bearer = await _apiBearer();
-    if (bearer != null && mediaUrl != null && mediaUrl.isNotEmpty) {
+    if (mediaUrl != null && mediaUrl.isNotEmpty) {
       mediaUrl = await _api.signedMediaUrl(bearer, mediaUrl) ?? mediaUrl;
     }
     final ok = await _audio.load(
@@ -2080,6 +2104,11 @@ class SessionState extends ChangeNotifier {
     usingRealAudio = ok;
     usingSampleAsset = ok && _audio.usingSampleAsset;
     if (!ok) {
+      if (mediaUrl != null && mediaUrl.isNotEmpty) {
+        showNotice(
+          'Could not stream this title yet. Pull to refresh, or re-open it after the API finishes syncing media.',
+        );
+      }
       if (autoplay) _restartTicker();
       return;
     }
