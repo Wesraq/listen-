@@ -2427,12 +2427,17 @@ class SessionState extends ChangeNotifier {
     usingRealAudio = ok;
     usingSampleAsset = ok && _audio.usingSampleAsset;
     if (!ok) {
+      // Do not advance a silent ticker — that looks like "playing with no sound".
+      playing = false;
+      _stopTicker();
       if (mediaUrl != null && mediaUrl.isNotEmpty) {
         showNotice(
-          'Could not stream this title yet. Pull to refresh, or re-open it after the API finishes syncing media.',
+          'Could not stream audio. Check volume, then pull to refresh. If this persists, media signing on the API may be misconfigured.',
         );
+      } else {
+        showNotice('No playable audio for this title yet.');
       }
-      if (autoplay) _restartTicker();
+      notifyListeners();
       return;
     }
 

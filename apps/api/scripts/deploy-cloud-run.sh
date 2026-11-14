@@ -47,6 +47,31 @@ gcloud services enable \
   storage.googleapis.com \
   --project="$PROJECT_ID"
 
+# Load selected secrets from apps/api/.env without `source` (values may contain spaces).
+env_get() {
+  local key="$1"
+  local file="$ROOT/.env"
+  [[ -f "$file" ]] || return 0
+  local line
+  line="$(grep -E "^${key}=" "$file" | tail -1 || true)"
+  [[ -n "$line" ]] || return 0
+  printf '%s' "${line#*=}"
+}
+
+MEDIA_SIGNING_SECRET_VALUE="${MEDIA_SIGNING_SECRET:-$(env_get MEDIA_SIGNING_SECRET)}"
+PAYMENT_WEBHOOK_SECRET_VALUE="${PAYMENT_WEBHOOK_SECRET:-$(env_get PAYMENT_WEBHOOK_SECRET)}"
+PAYMENT_WEBHOOK_SECRET_VALUE="${PAYMENT_WEBHOOK_SECRET_VALUE:-change-me}"
+if [[ -z "$MEDIA_SIGNING_SECRET_VALUE" ]]; then
+  echo "ERROR: MEDIA_SIGNING_SECRET is unset. Export it or set it in apps/api/.env"
+  echo "Without it, Android/iOS cannot mint signed media URLs and playback stays silent."
+  exit 1
+fi
+# Quote-safe for gcloud --set-env-vars (no commas in secret values).
+if [[ "$MEDIA_SIGNING_SECRET_VALUE" == *","* || "$PAYMENT_WEBHOOK_SECRET_VALUE" == *","* ]]; then
+  echo "ERROR: secrets must not contain commas (gcloud --set-env-vars delimiter)."
+  exit 1
+fi
+
 echo "→ Deploying $SERVICE to Cloud Run ($REGION) from source"
 gcloud run deploy "$SERVICE" \
   --source="$ROOT" \
@@ -59,7 +84,7 @@ gcloud run deploy "$SERVICE" \
   --cpu=1 \
   --min-instances=0 \
   --max-instances=3 \
-  --set-env-vars="DATA_BACKEND=firestore,MEDIA_BACKEND=firebase,AUTH_MODE=hybrid,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_STORAGE_BUCKET=${PROJECT_ID}.firebasestorage.app,FIRESTORE_PREFIX=listen,PAYMENTS_MODE=simulate,ALLOW_SIMULATED_PAYMENTS=true,ALLOW_CLIENT_GRANTS=false,ADS_SETTLEMENT_MODE=${ADS_SETTLEMENT_MODE:-simulate},AD_GROSS_MINOR=${AD_GROSS_MINOR:-50},PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET:-change-me}"
+  --set-env-vars="DATA_BACKEND=firestore,MEDIA_BACKEND=firebase,AUTH_MODE=hybrid,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_STORAGE_BUCKET=${PROJECT_ID}.firebasestorage.app,FIRESTORE_PREFIX=listen,PAYMENTS_MODE=simulate,ALLOW_SIMULATED_PAYMENTS=true,ALLOW_CLIENT_GRANTS=false,ADS_SETTLEMENT_MODE=${ADS_SETTLEMENT_MODE:-simulate},AD_GROSS_MINOR=${AD_GROSS_MINOR:-50},MEDIA_REQUIRE_SIGNED=true,MEDIA_SIGNING_SECRET=${MEDIA_SIGNING_SECRET_VALUE},PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET_VALUE}"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')"
 echo ""
