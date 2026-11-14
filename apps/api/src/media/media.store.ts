@@ -200,15 +200,37 @@ export class MediaStore implements OnModuleInit {
   async open(
     id: string,
   ): Promise<{ meta: MediaMeta; stream: Readable; absolutePath?: string }> {
-    const meta = await this.ensureMeta(id);
+    let meta = await this.ensureMeta(id);
 
-    if (meta.storagePath && this.storageBucket) {
+    if (this.useCloud && this.storageBucket) {
       const admin = await getFirebaseAdmin();
       if (!admin) throw new NotFoundException(`Media ${id} unavailable (no Firebase Admin)`);
-      const file = admin.storage().bucket(this.storageBucket).file(meta.storagePath);
-      const [exists] = await file.exists();
-      if (!exists) throw new NotFoundException(`Media file ${id} missing in Storage`);
-      return { meta, stream: file.createReadStream() };
+      const bucket = admin.storage().bucket(this.storageBucket);
+
+      if (meta.storagePath) {
+        const file = bucket.file(meta.storagePath);
+        const [exists] = await file.exists();
+        if (exists) return { meta, stream: file.createReadStream() };
+        this.logger.warn(
+          `Stored path missing for ${id} (${meta.storagePath}) in ${this.storageBucket}; re-probing`,
+        );
+      }
+
+      // Re-probe prefix in case meta pointed at a stale bucket/path.
+      const [files] = await bucket.getFiles({ prefix: `media/${id}/`, maxResults: 5 });
+      if (files.length > 0) {
+        const file = files[0];
+        meta = {
+          ...meta,
+          storagePath: file.name,
+          originalName: file.name.split('/').pop() || meta.originalName,
+        };
+        await this.persistMeta(meta);
+        return { meta, stream: file.createReadStream() };
+      }
+      throw new NotFoundException(
+        `Media file ${id} missing in Storage bucket ${this.storageBucket}`,
+      );
     }
 
     const absolutePath = join(this.root, id);
