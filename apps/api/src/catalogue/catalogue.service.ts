@@ -67,7 +67,13 @@ export class CatalogueService {
     monetisationMode?: TitleDto['monetisationMode'];
     subscriptionEligible?: boolean;
     creatorUid?: string;
-    chapters?: { id: string; title: string; body: string; sortOrder?: number }[];
+    chapters?: {
+      id: string;
+      title: string;
+      body: string;
+      sortOrder?: number;
+      isSample?: boolean;
+    }[];
     episodes?: {
       id: string;
       title: string;
@@ -76,6 +82,8 @@ export class CatalogueService {
       mediaId?: string;
       sortOrder?: number;
       showNotes?: string;
+      body?: string;
+      isSample?: boolean;
     }[];
   }): TitleDto {
     return this.store.publishCreatorTitle(input);
@@ -85,14 +93,23 @@ export class CatalogueService {
     titleId: string,
     input: {
       format: ContentFormat;
-      chapters?: { id: string; title: string; body: string; sortOrder?: number }[];
+      chapters?: {
+        id: string;
+        title: string;
+        body: string;
+        sortOrder?: number;
+        isSample?: boolean;
+      }[];
       episodes?: {
         id: string;
         title: string;
         durationSec: number;
         mediaName?: string;
+        mediaId?: string;
         sortOrder?: number;
         showNotes?: string;
+        body?: string;
+        isSample?: boolean;
       }[];
     },
   ) {

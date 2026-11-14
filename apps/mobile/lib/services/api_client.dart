@@ -672,6 +672,7 @@ class ListenApiClient {
               id: '${item['id'] ?? ''}',
               title: '${item['title'] ?? ''}',
               body: '${item['body'] ?? ''}',
+              isSample: item['isSample'] == true,
             ),
           )
           .toList();
@@ -700,6 +701,7 @@ class ListenApiClient {
               mediaUrl: item['mediaUrl'] == null
                   ? null
                   : absoluteMediaUrl('${item['mediaUrl']}'),
+              isSample: item['isSample'] == true,
             ),
           )
           .toList();

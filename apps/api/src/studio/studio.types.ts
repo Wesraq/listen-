@@ -20,6 +20,8 @@ export interface StudioChapter {
   title: string;
   body: string;
   sortOrder: number;
+  /** When true, this chapter is offered on “Read sample” before purchase. */
+  isSample?: boolean;
 }
 
 /** Audiobook track / podcast episode authored in Creator Studio. */
@@ -36,6 +38,8 @@ export interface StudioEpisode {
   showNotes?: string;
   /** Script / episode body text the creator attaches as content. */
   body?: string;
+  /** When true, this part is offered on “Listen to sample” before purchase. */
+  isSample?: boolean;
 }
 
 /** How the title is meant to earn (hybrid monetisation policy). */

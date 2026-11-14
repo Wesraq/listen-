@@ -81,6 +81,8 @@ class SessionState extends ChangeNotifier {
   bool usingSampleAsset = false;
   /// True while signed media / ExoPlayer load is in flight after play().
   bool audioLoading = false;
+  /// When true, the player only exposes creator-marked sample tracks.
+  bool previewPlayback = false;
   String notice = '';
   /// Active prefs partition — `guest` or Firebase uid.
   String _accountKey = 'guest';
@@ -441,6 +443,7 @@ class SessionState extends ChangeNotifier {
                 id: chapter.id,
                 title: chapter.title,
                 body: chapter.body,
+                isSample: chapter.isSample,
               ),
             )
             .toList(),
@@ -459,6 +462,7 @@ class SessionState extends ChangeNotifier {
                 mediaUrl: episode.mediaId == null || episode.mediaId!.isEmpty
                     ? null
                     : _api.absoluteMediaUrl('/v1/media/${episode.mediaId}'),
+                isSample: episode.isSample,
               ),
             )
             .toList(),
@@ -1188,6 +1192,7 @@ class SessionState extends ChangeNotifier {
                   sortOrder: entry.key,
                   mediaName: entry.value.mediaName,
                   mediaId: _mediaIdFromUrl(entry.value.mediaUrl),
+                  isSample: entry.value.isSample,
                 ),
               )
               .toList()
@@ -1202,6 +1207,7 @@ class SessionState extends ChangeNotifier {
                   title: entry.value.title,
                   body: entry.value.body,
                   sortOrder: entry.key,
+                  isSample: entry.value.isSample,
                 ),
               )
               .toList()
@@ -1261,6 +1267,7 @@ class SessionState extends ChangeNotifier {
                 sortOrder: entry.key,
                 mediaName: entry.value.mediaName,
                 mediaId: _mediaIdFromUrl(entry.value.mediaUrl),
+                isSample: entry.value.isSample,
               ),
             )
             .toList()
@@ -1275,6 +1282,7 @@ class SessionState extends ChangeNotifier {
                 title: entry.value.title,
                 body: entry.value.body,
                 sortOrder: entry.key,
+                isSample: entry.value.isSample,
               ),
             )
             .toList()
@@ -1760,6 +1768,7 @@ class SessionState extends ChangeNotifier {
     String? trackId,
     double? positionSec,
     bool autoplay = true,
+    bool previewOnly = false,
   }) async {
     // Wait only when we lack real remote tracks (placeholders don't count).
     if (!hasRemoteTracks(title.id)) {
@@ -1767,12 +1776,21 @@ class SessionState extends ChangeNotifier {
     } else {
       unawaited(refreshTitleParts(title.id, notify: false));
     }
-    final tracks = hasRemoteTracks(title.id)
+    final catalogueTracks = hasRemoteTracks(title.id)
         ? remoteTracks[title.id]!
         : tracksFor(title.id);
+    final tracks = previewOnly
+        ? (() {
+            final marked = catalogueTracks.where((t) => t.isSample).toList();
+            if (marked.isNotEmpty) return marked;
+            return catalogueTracks.isEmpty
+                ? catalogueTracks
+                : [catalogueTracks.first];
+          })()
+        : catalogueTracks;
     if (tracks.isEmpty) return;
 
-    final saved = progress[title.id];
+    final saved = previewOnly ? null : progress[title.id];
     final preferredId = trackId ?? saved?.locationId ?? tracks.first.id;
     final track = tracks.firstWhere(
       (item) => item.id == preferredId,
@@ -1785,6 +1803,7 @@ class SessionState extends ChangeNotifier {
     nowPlayingTrack = track;
     playbackPositionSec = start.clamp(0, track.durationSec.toDouble());
     _qualifiedListenAccumSec = 0;
+    previewPlayback = previewOnly;
     audioLoading = true;
 
     final needsPreroll = title.showsAds &&
@@ -1916,6 +1935,7 @@ class SessionState extends ChangeNotifier {
     usingRealAudio = false;
     usingSampleAsset = false;
     audioLoading = false;
+    previewPlayback = false;
     nowPlaying = null;
     nowPlayingTrack = null;
     playing = false;

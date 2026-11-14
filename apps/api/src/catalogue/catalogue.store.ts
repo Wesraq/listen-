@@ -316,7 +316,13 @@ export class CatalogueStore implements OnModuleInit {
     monetisationMode?: TitleDto['monetisationMode'];
     subscriptionEligible?: boolean;
     creatorUid?: string;
-    chapters?: { id: string; title: string; body: string; sortOrder?: number }[];
+    chapters?: {
+      id: string;
+      title: string;
+      body: string;
+      sortOrder?: number;
+      isSample?: boolean;
+    }[];
     episodes?: {
       id: string;
       title: string;
@@ -325,6 +331,8 @@ export class CatalogueStore implements OnModuleInit {
       mediaId?: string;
       sortOrder?: number;
       showNotes?: string;
+      body?: string;
+      isSample?: boolean;
     }[];
   }): TitleDto {
     const id = `creator-${input.draftId.replace(/^draft-/, '').slice(0, 12)}`;
@@ -452,7 +460,13 @@ export class CatalogueStore implements OnModuleInit {
     titleId: string,
     input: {
       format: ContentFormat;
-      chapters?: { id: string; title: string; body: string; sortOrder?: number }[];
+      chapters?: {
+        id: string;
+        title: string;
+        body: string;
+        sortOrder?: number;
+        isSample?: boolean;
+      }[];
       episodes?: {
         id: string;
         title: string;
@@ -462,6 +476,7 @@ export class CatalogueStore implements OnModuleInit {
         sortOrder?: number;
         showNotes?: string;
         body?: string;
+        isSample?: boolean;
       }[];
     },
   ) {
@@ -481,6 +496,7 @@ export class CatalogueStore implements OnModuleInit {
             id: chapter.id || `${titleId}-ch${index + 1}`,
             title: chapter.title,
             body: chapter.body,
+            isSample: chapter.isSample === true,
           }))
         : [
             {
@@ -488,6 +504,7 @@ export class CatalogueStore implements OnModuleInit {
               title: 'Opening',
               body:
                 'This chapter was published from a creator upload on Listen+. Full EPUB parsing arrives with storage-backed media.',
+              isSample: true,
             },
             {
               id: `${titleId}-ch2`,
@@ -511,9 +528,10 @@ export class CatalogueStore implements OnModuleInit {
             durationSec: episode.durationSec || 180,
             mediaName: episode.mediaName,
             mediaUrl: episode.mediaId ? `/v1/media/${episode.mediaId}` : undefined,
+            isSample: episode.isSample === true,
           }))
         : [
-            { id: `${titleId}-t1`, title: 'Episode 1', durationSec: 180 },
+            { id: `${titleId}-t1`, title: 'Episode 1', durationSec: 180, isSample: true },
             { id: `${titleId}-t2`, title: 'Episode 2', durationSec: 240 },
           ];
     } else {

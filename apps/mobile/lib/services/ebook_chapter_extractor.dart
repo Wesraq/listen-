@@ -227,8 +227,13 @@ class EbookChapterExtractor {
           title: title.isEmpty ? chapter.title : title,
           body: body.isEmpty ? chapter.body : body,
           sortOrder: out.length,
+          isSample: chapter.isSample,
         ),
       );
+    }
+    // Default free sample: first chapter unless the creator already marked one.
+    if (out.isNotEmpty && !out.any((c) => c.isSample)) {
+      out[0] = out[0].copyWith(isSample: true);
     }
     return out;
   }

@@ -135,6 +135,16 @@ export class StudioController {
       displayName?: string;
     },
   ) {
+    const existing = this.studio.findDraft(id);
+    // Live titles stay live on ordinary saves (cover/title/parts). Only an
+    // explicit submit re-queues non-live drafts for moderation.
+    let nextStatus: 'draft' | 'submitted' | 'live' | undefined;
+    if (body.submit === true) {
+      nextStatus = existing?.status === 'live' ? 'live' : 'submitted';
+    } else if (body.submit === false) {
+      nextStatus = existing?.status === 'live' ? 'live' : 'draft';
+    }
+
     const draft = this.studio.updateDraft(id, user.uid, {
       title: body.title,
       format: body.format,
@@ -151,7 +161,7 @@ export class StudioController {
       coverImageId: body.coverImageId,
       chapters: body.chapters,
       episodes: body.episodes,
-      status: body.submit ? 'submitted' : body.submit === false ? 'draft' : undefined,
+      status: nextStatus,
       creatorEmail: body.email?.trim() || user.email,
       creatorDisplayName: body.displayName?.trim() || user.displayName,
     });

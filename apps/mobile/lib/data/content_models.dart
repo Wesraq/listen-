@@ -28,18 +28,22 @@ class ContentChapter {
     required this.title,
     required this.body,
     required this.sortOrder,
+    this.isSample = false,
   });
 
   final String id;
   final String title;
   final String body;
   final int sortOrder;
+  /// Offered on the consumer “Read sample” button before purchase.
+  final bool isSample;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'body': body,
         'sortOrder': sortOrder,
+        'isSample': isSample,
       };
 
   factory ContentChapter.fromJson(Map<String, dynamic> json) => ContentChapter(
@@ -47,18 +51,21 @@ class ContentChapter {
         title: '${json['title'] ?? ''}',
         body: '${json['body'] ?? ''}',
         sortOrder: (json['sortOrder'] as num?)?.toInt() ?? 0,
+        isSample: json['isSample'] == true,
       );
 
   ContentChapter copyWith({
     String? title,
     String? body,
     int? sortOrder,
+    bool? isSample,
   }) =>
       ContentChapter(
         id: id,
         title: title ?? this.title,
         body: body ?? this.body,
         sortOrder: sortOrder ?? this.sortOrder,
+        isSample: isSample ?? this.isSample,
       );
 }
 
@@ -73,6 +80,7 @@ class ContentEpisode {
     this.mediaId,
     this.showNotes,
     this.body,
+    this.isSample = false,
   });
 
   final String id;
@@ -87,6 +95,8 @@ class ContentEpisode {
   final String? showNotes;
   /// Script / episode text content.
   final String? body;
+  /// Offered on the consumer “Listen to sample” button before purchase.
+  final bool isSample;
 
   bool get hasContent =>
       (mediaName != null && mediaName!.trim().isNotEmpty) ||
@@ -103,6 +113,7 @@ class ContentEpisode {
         'mediaId': mediaId,
         'showNotes': showNotes,
         'body': body,
+        'isSample': isSample,
       };
 
   factory ContentEpisode.fromJson(Map<String, dynamic> json) => ContentEpisode(
@@ -115,6 +126,7 @@ class ContentEpisode {
         mediaId: json['mediaId'] == null ? null : '${json['mediaId']}',
         showNotes: json['showNotes'] == null ? null : '${json['showNotes']}',
         body: json['body'] == null ? null : '${json['body']}',
+        isSample: json['isSample'] == true,
       );
 
   ContentEpisode copyWith({
@@ -126,6 +138,7 @@ class ContentEpisode {
     String? mediaId,
     String? showNotes,
     String? body,
+    bool? isSample,
     bool clearMedia = false,
   }) =>
       ContentEpisode(
@@ -138,6 +151,7 @@ class ContentEpisode {
         mediaId: clearMedia ? null : (mediaId ?? this.mediaId),
         showNotes: showNotes ?? this.showNotes,
         body: body ?? this.body,
+        isSample: isSample ?? this.isSample,
       );
 }
 

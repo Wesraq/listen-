@@ -77,11 +77,12 @@ Future<void> _launchTitleExperience(
 
   final listen = mode == 'listen' || (mode == 'auto' && title.isAudio && !title.isDualFormat);
   if (listen) {
-    final tracks = tracksFor(title.id);
+    final tracks = sample ? previewTracksFor(title.id) : tracksFor(title.id);
     // play() notifies as soon as nowPlaying is set; audio loads in the background.
     await session.play(
       title,
       trackId: sample && tracks.isNotEmpty ? tracks.first.id : null,
+      previewOnly: sample,
     );
     if (!context.mounted) return;
     await openPlayerSheet(context);
@@ -430,12 +431,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _loadChapters() async {
     final session = context.read<SessionState>();
 
+    List<SampleChapter> maybePreview(List<SampleChapter> next) {
+      if (!widget.sampleOnly) return next;
+      final marked = next.where((c) => c.isSample).toList();
+      if (marked.isNotEmpty) return marked;
+      return next.isEmpty ? next : [next.first];
+    }
+
     void applyReadable(List<SampleChapter> next) {
-      final saved = session.progressFor(widget.title.id);
-      final savedIndex = next.indexWhere((chapter) => chapter.id == saved?.locationId);
+      final readable = maybePreview(next);
+      final saved = widget.sampleOnly ? null : session.progressFor(widget.title.id);
+      final savedIndex = readable.indexWhere((chapter) => chapter.id == saved?.locationId);
       setState(() {
         _pdfMode = false;
-        chapters = next;
+        chapters = readable;
         chapterIndex = savedIndex >= 0 ? savedIndex : 0;
         _pendingScrollFraction = saved?.position ?? 0;
         _loading = false;

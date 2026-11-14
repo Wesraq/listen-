@@ -64,12 +64,15 @@ class _AudiobookPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
-    final tracks = tracksFor(title.id);
+    final tracks =
+        session.previewPlayback ? previewTracksFor(title.id) : tracksFor(title.id);
     final duration = track.durationSec.toDouble();
     final position = session.playbackPositionSec.clamp(0.0, duration <= 0 ? 1 : duration).toDouble();
     final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);
     final trackIndex = tracks.indexWhere((t) => t.id == track.id);
-    final chapterLabel = trackIndex >= 0 ? 'Chapter ${trackIndex + 1}' : 'Chapter';
+    final chapterLabel = trackIndex >= 0
+        ? (session.previewPlayback ? 'Sample ${trackIndex + 1}' : 'Chapter ${trackIndex + 1}')
+        : (session.previewPlayback ? 'Sample' : 'Chapter');
 
     return DraggableScrollableSheet(
       expand: false,
@@ -522,7 +525,8 @@ class _PodcastPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
-    final tracks = tracksFor(title.id);
+    final tracks =
+        session.previewPlayback ? previewTracksFor(title.id) : tracksFor(title.id);
     final duration = track.durationSec.toDouble();
     final position = session.playbackPositionSec.clamp(0.0, duration <= 0 ? 1 : duration).toDouble();
     final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);

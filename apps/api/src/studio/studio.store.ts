@@ -396,6 +396,7 @@ export class StudioStore implements OnModuleInit {
         title: (chapter.title ?? '').trim() || `Chapter ${index + 1}`,
         body: (chapter.body ?? '').trim() || 'Chapter body coming soon.',
         sortOrder: chapter.sortOrder ?? index,
+        isSample: chapter.isSample === true,
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((chapter, index) => ({ ...chapter, sortOrder: index }));
@@ -413,6 +414,7 @@ export class StudioStore implements OnModuleInit {
         showNotes: episode.showNotes?.trim() || undefined,
         body: episode.body?.trim() || undefined,
         sortOrder: episode.sortOrder ?? index,
+        isSample: episode.isSample === true,
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((episode, index) => ({ ...episode, sortOrder: index }));

@@ -399,7 +399,8 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                           child: _ContentCard(
                             draft: left,
                             marketCurrency: session.currencyCode,
-                            onOpen: () => showStudioUploadFlow(
+                            onOpen: () => showStudioQuickEdit(context, session, left),
+                            onFullEdit: () => showStudioUploadFlow(
                               context,
                               session,
                               existing: left,
@@ -421,7 +422,8 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                               : _ContentCard(
                                   draft: right,
                                   marketCurrency: session.currencyCode,
-                                  onOpen: () => showStudioUploadFlow(
+                                  onOpen: () => showStudioQuickEdit(context, session, right),
+                                  onFullEdit: () => showStudioUploadFlow(
                                     context,
                                     session,
                                     existing: right,
@@ -564,6 +566,7 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                         : 'Track ${episodes.length + 1}',
                     durationSec: 0,
                     sortOrder: episodes.length,
+                    isSample: episodes.isEmpty,
                   ),
                 ];
               });
@@ -652,6 +655,19 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                                           height: 1.35,
                                           color: ListenColors.ink.withValues(alpha: 0.6),
                                         ),
+                                      ),
+                                      SwitchListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        dense: true,
+                                        title: const Text('Include in free sample'),
+                                        subtitle: const Text('Read sample on the title page'),
+                                        value: chapter.isSample,
+                                        onChanged: (value) {
+                                          setModalState(() {
+                                            chapters[index] =
+                                                chapters[index].copyWith(isSample: value);
+                                          });
+                                        },
                                       ),
                                     ],
                                   ),
@@ -778,6 +794,19 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
                                           },
                                         ),
                                       ],
+                                      SwitchListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        dense: true,
+                                        title: const Text('Include in free sample'),
+                                        subtitle: const Text('Listen to sample on the title page'),
+                                        value: episode.isSample,
+                                        onChanged: (value) {
+                                          setModalState(() {
+                                            episodes[index] =
+                                                episodes[index].copyWith(isSample: value);
+                                          });
+                                        },
+                                      ),
                                     ],
                                   ),
                                 ),
@@ -955,6 +984,7 @@ class _ContentCard extends StatelessWidget {
     required this.draft,
     required this.marketCurrency,
     required this.onOpen,
+    required this.onFullEdit,
     required this.onParts,
     this.onDelete,
   });
@@ -962,6 +992,7 @@ class _ContentCard extends StatelessWidget {
   final CreatorDraft draft;
   final String marketCurrency;
   final VoidCallback onOpen;
+  final VoidCallback onFullEdit;
   final VoidCallback onParts;
   final VoidCallback? onDelete;
 
@@ -1045,14 +1076,20 @@ class _ContentCard extends StatelessWidget {
                     padding: EdgeInsets.zero,
                     onSelected: (value) {
                       switch (value) {
-                        case 'edit':
+                        case 'quick':
                           onOpen();
+                        case 'full':
+                          onFullEdit();
+                        case 'parts':
+                          onParts();
                         case 'delete':
                           onDelete?.call();
                       }
                     },
                     itemBuilder: (_) => [
-                      const PopupMenuItem(value: 'edit', child: Text('Edit title & price')),
+                      const PopupMenuItem(value: 'quick', child: Text('Quick edit · title & cover')),
+                      const PopupMenuItem(value: 'full', child: Text('Full editor')),
+                      const PopupMenuItem(value: 'parts', child: Text('Manage parts & samples')),
                       if (onDelete != null)
                         const PopupMenuItem(value: 'delete', child: Text('Delete')),
                     ],

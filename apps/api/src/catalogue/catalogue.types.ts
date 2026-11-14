@@ -56,6 +56,8 @@ export interface ChapterDto {
   id: string;
   title: string;
   body: string;
+  /** Free preview chapter for “Read sample”. */
+  isSample?: boolean;
 }
 
 export interface AudioTrackDto {
@@ -65,4 +67,6 @@ export interface AudioTrackDto {
   /** Absolute or API-relative URL for the uploaded episode audio. */
   mediaUrl?: string;
   mediaName?: string;
+  /** Free preview track for “Listen to sample”. */
+  isSample?: boolean;
 }

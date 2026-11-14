@@ -260,11 +260,13 @@ class SampleChapter {
     required this.id,
     required this.title,
     required this.body,
+    this.isSample = false,
   });
 
   final String id;
   final String title;
   final String body;
+  final bool isSample;
 }
 
 class SampleAudioTrack {
@@ -274,6 +276,7 @@ class SampleAudioTrack {
     required this.durationSec,
     this.mediaUrl,
     this.mediaName,
+    this.isSample = false,
   });
 
   final String id;
@@ -282,6 +285,7 @@ class SampleAudioTrack {
   /// API-relative (`/v1/media/...`) or absolute URL for uploaded audio.
   final String? mediaUrl;
   final String? mediaName;
+  final bool isSample;
 
   String get durationLabel {
     final minutes = durationSec ~/ 60;
@@ -357,7 +361,7 @@ List<SampleChapter> chaptersFor(String titleId) =>
     remoteChapters[titleId] ??
     sampleChapters[titleId] ??
     const [
-      SampleChapter(id: 'sample-1', title: 'Chapter one', body: _placeholderBody),
+      SampleChapter(id: 'sample-1', title: 'Chapter one', body: _placeholderBody, isSample: true),
       SampleChapter(id: 'sample-2', title: 'Chapter two', body: _placeholderBody),
     ];
 
@@ -365,9 +369,25 @@ List<SampleAudioTrack> tracksFor(String titleId) =>
     remoteTracks[titleId] ??
     sampleTracks[titleId] ??
     const [
-      SampleAudioTrack(id: 'track-1', title: 'Part one', durationSec: 15 * 60),
+      SampleAudioTrack(id: 'track-1', title: 'Part one', durationSec: 15 * 60, isSample: true),
       SampleAudioTrack(id: 'track-2', title: 'Part two', durationSec: 15 * 60),
     ];
+
+/// Chapters offered on “Read sample” — creator-marked, else the first chapter.
+List<SampleChapter> previewChaptersFor(String titleId) {
+  final all = chaptersFor(titleId);
+  final marked = all.where((chapter) => chapter.isSample).toList();
+  if (marked.isNotEmpty) return marked;
+  return all.isEmpty ? const [] : [all.first];
+}
+
+/// Tracks offered on “Listen to sample” — creator-marked, else the first track.
+List<SampleAudioTrack> previewTracksFor(String titleId) {
+  final all = tracksFor(titleId);
+  final marked = all.where((track) => track.isSample).toList();
+  if (marked.isNotEmpty) return marked;
+  return all.isEmpty ? const [] : [all.first];
+}
 
 const creators = <CreatorProfile>[];
 

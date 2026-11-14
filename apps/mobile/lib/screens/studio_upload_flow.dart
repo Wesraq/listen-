@@ -39,6 +39,223 @@ Future<void> showStudioUploadFlow(
   );
 }
 
+/// Title + cover only — skips the full multi-step upload wizard.
+Future<void> showStudioQuickEdit(
+  BuildContext context,
+  SessionState session,
+  CreatorDraft draft,
+) async {
+  unawaited(session.draftForEdit(draft));
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: ListenColors.sand,
+    builder: (context) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: _StudioQuickEditSheet(session: session, draft: draft),
+      );
+    },
+  );
+}
+
+class _StudioQuickEditSheet extends StatefulWidget {
+  const _StudioQuickEditSheet({required this.session, required this.draft});
+
+  final SessionState session;
+  final CreatorDraft draft;
+
+  @override
+  State<_StudioQuickEditSheet> createState() => _StudioQuickEditSheetState();
+}
+
+class _StudioQuickEditSheetState extends State<_StudioQuickEditSheet> {
+  late final TextEditingController title;
+  String? coverImageName;
+  String? coverImagePath;
+  int? coverImageBytes;
+  var saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    title = TextEditingController(text: widget.draft.title);
+    coverImageName = widget.draft.coverImageName;
+    coverImagePath = widget.draft.coverImagePath;
+    coverImageBytes = widget.draft.coverImageBytes;
+  }
+
+  @override
+  void dispose() {
+    title.dispose();
+    super.dispose();
+  }
+
+  Future<String?> _persist(String? sourcePath, String folder, String name) async {
+    if (sourcePath == null || sourcePath.isEmpty) return null;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final destDir = Directory('${dir.path}/$folder');
+      if (!await destDir.exists()) await destDir.create(recursive: true);
+      final dest = File('${destDir.path}/${DateTime.now().millisecondsSinceEpoch}_$name');
+      await File(sourcePath).copy(dest.path);
+      return dest.path;
+    } catch (_) {
+      return sourcePath;
+    }
+  }
+
+  Future<void> _pickCover() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final file = result.files.first;
+      final persisted = await _persist(file.path, 'covers', file.name);
+      setState(() {
+        coverImageName = file.name;
+        coverImagePath = persisted ?? file.path;
+        coverImageBytes = file.size;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not pick a cover photo.')),
+      );
+    }
+  }
+
+  Future<void> _save() async {
+    final nextTitle = title.text.trim();
+    if (nextTitle.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a title.')),
+      );
+      return;
+    }
+    setState(() => saving = true);
+    final draft = widget.draft;
+    // Live titles stay live; drafts stay drafts — no re-moderation for cover/title.
+    await widget.session.saveCreatorDraft(
+      existingId: draft.id,
+      title: nextTitle,
+      format: draft.format,
+      prices: draft.prices,
+      genre: draft.genre,
+      monetisationMode: draft.monetisationMode,
+      subscriptionEligible: draft.subscriptionEligible,
+      mediaName: draft.mediaName,
+      mediaPath: draft.mediaPath,
+      mediaKind: draft.mediaKind,
+      mediaBytes: draft.mediaBytes,
+      coverImageName: coverImageName,
+      coverImagePath: coverImagePath,
+      coverImageBytes: coverImageBytes,
+      coverImageId: draft.coverImageId,
+      chapters: draft.chapters,
+      episodes: draft.episodes,
+      submit: false,
+    );
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasLocalCover = coverImagePath != null && File(coverImagePath!).existsSync();
+    final live = widget.draft.status == 'live';
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Quick edit', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 6),
+            Text(
+              live
+                  ? 'Update the title or cover. Changes go live without walking the full upload flow again.'
+                  : 'Update the title or cover without redoing chapters, pricing, or rights.',
+              style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.62), height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: title,
+              decoration: const InputDecoration(
+                labelText: 'Title',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: saving ? null : _pickCover,
+              child: AspectRatio(
+                aspectRatio: 3 / 4,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: ListenColors.ink.withValues(alpha: 0.08)),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(17),
+                    child: hasLocalCover
+                        ? Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image.file(File(coverImagePath!), fit: BoxFit.cover),
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Container(
+                                  width: double.infinity,
+                                  color: Colors.black54,
+                                  padding: const EdgeInsets.all(10),
+                                  child: const Text(
+                                    'Tap to change cover',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : Center(
+                            child: Text(
+                              coverImageName ?? 'Tap to add cover',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.55)),
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: saving ? null : _save,
+              child: Text(saving ? 'Saving…' : 'Save'),
+            ),
+            TextButton(
+              onPressed: saving
+                  ? null
+                  : () {
+                      Navigator.pop(context);
+                      showStudioUploadFlow(context, widget.session, existing: widget.draft);
+                    },
+              child: const Text('Open full editor'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StudioUploadShell extends StatefulWidget {
   const _StudioUploadShell({required this.session, this.existing});
 
@@ -620,6 +837,8 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
           title: '$noun ${episodes.length + 1}',
           durationSec: 0,
           sortOrder: episodes.length,
+          // First part becomes the free hear-sample unless the creator marks others.
+          isSample: episodes.isEmpty,
         ),
       ];
     });
@@ -1384,6 +1603,16 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
                           episodes[index] = episodes[index].copyWith(showNotes: value);
                         },
                       ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text('Include in free sample'),
+                        subtitle: const Text('Shown when listeners tap Listen to sample'),
+                        value: episode.isSample,
+                        onChanged: (value) => setState(() {
+                          episodes[index] = episodes[index].copyWith(isSample: value);
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -2055,6 +2284,16 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
                     color: ListenColors.ink.withValues(alpha: 0.6),
                   ),
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Include in free sample'),
+                  subtitle: const Text('Shown when listeners tap Read sample'),
+                  value: chapter.isSample,
+                  onChanged: (value) => setState(() {
+                    chapters[i] = chapters[i].copyWith(isSample: value);
+                  }),
+                ),
               ],
             ),
           );
@@ -2147,6 +2386,16 @@ class _FormatUploadWizardState extends State<_FormatUploadWizard> {
                   fontSize: 12.5,
                   color: ListenColors.ink.withValues(alpha: 0.55),
                 ),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Include in free sample'),
+                subtitle: Text('Shown when listeners tap Listen to sample'),
+                value: episode.isSample,
+                onChanged: (value) => setState(() {
+                  episodes[index] = episodes[index].copyWith(isSample: value);
+                }),
               ),
               if (allowScript) ...[
                 const SizedBox(height: 4),
