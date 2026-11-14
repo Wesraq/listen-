@@ -46,7 +46,15 @@ export interface PayoutRequest {
   creatorName: string;
   amountMinor: number;
   currency: string;
-  status: 'requested' | 'approved' | 'rejected' | 'settled';
+  status:
+    | 'requested'
+    | 'approved'
+    | 'processing'
+    | 'provider_confirmed'
+    | 'settled'
+    | 'failed'
+    | 'reversed'
+    | 'rejected';
   requestedAt: string;
   reference?: string;
 }

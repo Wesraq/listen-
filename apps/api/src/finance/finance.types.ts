@@ -54,6 +54,13 @@ export interface LedgerJournal {
   titleId?: string;
   provider?: PaymentProvider;
   providerRef?: string;
+  /**
+   * When false, credits do not increase cashout-available balances
+   * (e.g. simulated AdMob gross until reconciled network receipts exist).
+   */
+  cashoutEligible?: boolean;
+  /** Optional provenance for auditors. */
+  settlementSource?: 'payment' | 'ssv_simulated' | 'ad_reconciled' | 'studio_migration' | string;
 }
 
 export interface AccountBalance {
@@ -85,12 +92,19 @@ export interface CreatorBalanceSnapshot {
 
 export type CashoutRail = 'mtn_momo' | 'airtel_money' | 'bank';
 
+/**
+ * Cashout lifecycle. Ledger debit only on `settled`, and only after
+ * `provider_confirmed` (verified disbursement / sandbox confirm).
+ */
 export type CashoutStatus =
   | 'requested'
   | 'approved'
-  | 'rejected'
+  | 'processing'
+  | 'provider_confirmed'
   | 'settled'
-  | 'failed';
+  | 'failed'
+  | 'reversed'
+  | 'rejected';
 
 export interface CashoutRequest {
   id: string;
@@ -111,9 +125,20 @@ export interface CashoutRequest {
   updatedAt: string;
   decidedAt?: string;
   decidedBy?: string;
+  /** When disbursement instruction was handed to the rail adapter. */
+  processingAt?: string;
+  /** When the rail reported success (webhook / statement). */
+  providerConfirmedAt?: string;
+  /** When the ledger payout journal was posted. */
+  settledAt?: string;
   providerRef?: string;
   failureReason?: string;
   journalId?: string;
+  /**
+   * True only after a real (or explicitly sandboxed) provider confirmation.
+   * Admin UI “Settle” must not invent this without a providerRef.
+   */
+  providerConfirmed?: boolean;
 }
 
 export interface SubscriptionPlan {

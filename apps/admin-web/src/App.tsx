@@ -611,6 +611,10 @@ export function App() {
             <div className="space-y-6">
               <div className="panel">
                 <h2 className="mb-3 text-sm font-medium">Cashouts</h2>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Flow: requested → approved → processing → provider_confirmed → ledger settle.
+                  Approve does not send money; settle posts the ledger only after provider confirm.
+                </p>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -644,15 +648,33 @@ export function App() {
                             size="sm"
                             variant="outline"
                             onClick={() =>
+                              void decidePayout(token, String(item.id), 'processing').then(refresh)
+                            }
+                          >
+                            Processing
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
                               void decidePayout(
                                 token,
                                 String(item.id),
-                                'settled',
-                                'DEMO-SETTLE-001',
+                                'provider_confirmed',
+                                `sandbox_${String(item.id).slice(0, 8)}`,
                               ).then(refresh)
                             }
                           >
-                            Settle
+                            Provider OK
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void decidePayout(token, String(item.id), 'settled').then(refresh)
+                            }
+                          >
+                            Ledger settle
                           </Button>
                           <Button
                             size="sm"
@@ -686,7 +708,8 @@ export function App() {
                     {adSettlements.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={6} className="text-muted-foreground">
-                          No ad settlements yet — completions post here after verified AdMob rewards.
+                          No ad settlements yet. Client rewardEarned never pays; SSV/reconcile only.
+                          Simulated AD_GROSS journals are not cashoutable.
                         </TableCell>
                       </TableRow>
                     ) : (

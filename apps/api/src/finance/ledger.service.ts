@@ -19,6 +19,7 @@ import type {
   Subscription,
   SubscriptionPlan,
 } from './finance.types';
+import { processingFeeBpsFor } from '../payments/processing-fees';
 import { creatorPayableAccount, isDebitNormal } from './finance.types';
 import { LedgerStore } from './ledger.store';
 
@@ -26,6 +27,13 @@ const HOLD_DAYS = 7;
 const MIN_PAYOUT_MINOR = 50_00;
 /** Flat payout fee in minor units (creator-paid). */
 const PAYOUT_FEE_MINOR = 2_00;
+
+const IN_FLIGHT_CASHOUT: CashoutStatus[] = [
+  'requested',
+  'approved',
+  'processing',
+  'provider_confirmed',
+];
 
 @Injectable()
 export class LedgerService {
@@ -61,6 +69,8 @@ export class LedgerService {
     providerRef?: string;
     /** Optional ISO timestamp — used when backfilling historical Studio sales. */
     at?: string;
+    cashoutEligible?: boolean;
+    settlementSource?: string;
   }): LedgerJournal {
     if (this.store.hasSettled(input.referenceType, input.referenceId)) {
       const existing = this.store
@@ -117,6 +127,8 @@ export class LedgerService {
       titleId: input.titleId,
       provider: input.provider,
       providerRef: input.providerRef,
+      cashoutEligible: input.cashoutEligible !== false,
+      settlementSource: input.settlementSource,
     };
     this.store.appendJournal(journal);
     return journal;
@@ -148,7 +160,7 @@ export class LedgerService {
     platformShareMinor: number;
   } {
     const gross = Math.max(0, Math.floor(input.grossMinor));
-    const feeBps = input.processingFeeBps ?? 300;
+    const feeBps = input.processingFeeBps ?? processingFeeBpsFor(input.provider);
     const creatorBps = input.creatorShareBps ?? 7000;
     const feeMinor = Math.floor((gross * feeBps) / 10_000);
     const netMinor = Math.max(0, gross - feeMinor);
@@ -220,6 +232,8 @@ export class LedgerService {
       titleId: input.titleId,
       provider: input.provider,
       providerRef: input.providerRef,
+      cashoutEligible: true,
+      settlementSource: 'payment',
     });
 
     return {
@@ -335,8 +349,10 @@ export class LedgerService {
   }
 
   /**
-   * Settle a verified ad completion (AdMob reward / SSV).
-   * Default split: 55% creator payable, 45% advertising revenue.
+   * Settle a verified ad completion.
+   * Default split: 55% creator / 45% platform of attributed gross.
+   * Simulated AdMob fixed gross posts with cashoutEligible=false until
+   * network receipts are reconciled.
    */
   settleAdvertising(input: {
     referenceId: string;
@@ -348,16 +364,21 @@ export class LedgerService {
     creatorShareBps?: number;
     campaignId?: string;
     placement?: string;
+    /** false for prototype AD_GROSS / SSV-simulated amounts. */
+    cashoutEligible?: boolean;
+    settlementSource?: string;
   }): {
     journal: LedgerJournal;
     created: boolean;
     creatorShareMinor: number;
     platformShareMinor: number;
+    cashoutEligible: boolean;
   } {
     const gross = Math.max(0, Math.floor(input.grossMinor));
     const creatorBps = input.creatorShareBps ?? 5500;
     const creatorShareMinor = Math.floor((gross * creatorBps) / 10_000);
     const platformShareMinor = Math.max(0, gross - creatorShareMinor);
+    const cashoutEligible = input.cashoutEligible === true;
 
     if (this.store.hasSettled('ad_completion', input.referenceId)) {
       const existing = this.store
@@ -372,6 +393,7 @@ export class LedgerService {
           created: false,
           creatorShareMinor,
           platformShareMinor,
+          cashoutEligible: existing.cashoutEligible !== false,
         };
       }
     }
@@ -385,9 +407,11 @@ export class LedgerService {
         account: 'assets:processor_clearing',
         debitMinor: gross,
         creditMinor: 0,
-        memo: input.campaignId
-          ? `Ad network receipt · ${input.campaignId}`
-          : 'Ad network receipt',
+        memo: cashoutEligible
+          ? input.campaignId
+            ? `Ad network receipt · ${input.campaignId}`
+            : 'Ad network receipt'
+          : `SIMULATED ad gross · ${input.campaignId ?? 'network'} (not cashoutable)`,
       },
     ];
     if (creatorShareMinor > 0) {
@@ -395,7 +419,9 @@ export class LedgerService {
         account: creatorPayableAccount(input.creatorUid),
         debitMinor: 0,
         creditMinor: creatorShareMinor,
-        memo: `Creator ad share · ${input.placement ?? 'ad'}`,
+        memo: cashoutEligible
+          ? `Creator ad share · ${input.placement ?? 'ad'}`
+          : `SIMULATED creator ad share · ${input.placement ?? 'ad'}`,
       });
     }
     if (platformShareMinor > 0) {
@@ -403,7 +429,7 @@ export class LedgerService {
         account: 'revenue:advertising',
         debitMinor: 0,
         creditMinor: platformShareMinor,
-        memo: 'Platform ad share',
+        memo: cashoutEligible ? 'Platform ad share' : 'SIMULATED platform ad share',
       });
     }
 
@@ -413,10 +439,14 @@ export class LedgerService {
       referenceType: 'ad_completion',
       referenceId: input.referenceId,
       lines,
-      memo: `Ad completion ${input.titleId}`,
+      memo: cashoutEligible
+        ? `Ad completion ${input.titleId}`
+        : `SIMULATED ad completion ${input.titleId}`,
       customerUid: input.customerUid,
       creatorUid: input.creatorUid,
       titleId: input.titleId,
+      cashoutEligible,
+      settlementSource: input.settlementSource ?? (cashoutEligible ? 'ad_reconciled' : 'ssv_simulated'),
     });
 
     return {
@@ -424,6 +454,7 @@ export class LedgerService {
       created: true,
       creatorShareMinor,
       platformShareMinor,
+      cashoutEligible,
     };
   }
 
@@ -442,6 +473,12 @@ export class LedgerService {
     stream: 'purchase' | 'subscription_pool' | 'advertising' | string;
     at?: string;
     note?: string;
+    /**
+     * Migrations and pool estimates default to false — they must not create
+     * cashoutable liabilities without reconciled funds.
+     */
+    cashoutEligible?: boolean;
+    settlementSource?: string;
   }): { journal: LedgerJournal; created: boolean } | null {
     const note = (input.note ?? '').toLowerCase();
     // Already mirrored when payments/ads posted the real settlement journal.
@@ -453,6 +490,7 @@ export class LedgerService {
     const platformShare = Math.max(0, Math.floor(input.platformShareMinor));
     const gross = creatorShare + platformShare;
     if (gross <= 0 || !input.creatorUid) return null;
+    const cashoutEligible = input.cashoutEligible === true;
 
     if (this.store.hasSettled('studio_sale', input.saleId)) {
       const existing = this.store
@@ -472,11 +510,12 @@ export class LedgerService {
 
     const lines: LedgerLine[] = [
       {
-        // Balancing debit — historical Studio lines lacked a live processor receipt.
         account: 'assets:processor_clearing',
         debitMinor: gross,
         creditMinor: 0,
-        memo: `Studio sale ${input.stream}`,
+        memo: cashoutEligible
+          ? `Studio sale ${input.stream}`
+          : `NON-CASHOUTABLE studio/pool line · ${input.stream}`,
       },
     ];
     if (creatorShare > 0) {
@@ -484,7 +523,9 @@ export class LedgerService {
         account: creatorPayableAccount(input.creatorUid),
         debitMinor: 0,
         creditMinor: creatorShare,
-        memo: 'Creator share (Studio backfill / pool)',
+        memo: cashoutEligible
+          ? 'Creator share'
+          : 'NON-CASHOUTABLE creator share (migration/estimate)',
       });
     }
     if (platformShare > 0) {
@@ -506,12 +547,17 @@ export class LedgerService {
       creatorUid: input.creatorUid,
       titleId: input.titleId,
       at: input.at,
+      cashoutEligible,
+      settlementSource: input.settlementSource ?? 'studio_migration',
     });
 
     return { journal, created: true };
   }
 
-  /** Idempotently lift Studio-only earnings onto creator payables. */
+  /**
+   * Admin-only migration helper. Never call from GET handlers.
+   * Defaults to cashoutEligible=false unless explicitly opted in.
+   */
   backfillStudioSales(
     sales: Array<{
       id: string;
@@ -524,7 +570,9 @@ export class LedgerService {
       at?: string;
       note?: string;
     }>,
-  ): { posted: number; skipped: number } {
+    options?: { cashoutEligible?: boolean },
+  ): { posted: number; skipped: number; cashoutEligible: boolean } {
+    const cashoutEligible = options?.cashoutEligible === true;
     let posted = 0;
     let skipped = 0;
     for (const sale of sales) {
@@ -538,12 +586,14 @@ export class LedgerService {
         stream: sale.stream,
         at: sale.at,
         note: sale.note,
+        cashoutEligible,
+        settlementSource: 'studio_migration',
       });
       if (!result) skipped += 1;
       else if (result.created) posted += 1;
       else skipped += 1;
     }
-    return { posted, skipped };
+    return { posted, skipped, cashoutEligible };
   }
 
   /** Recent advertising settlements for ops / Studio cross-check. */
@@ -571,6 +621,8 @@ export class LedgerService {
           grossMinor,
           creatorShareMinor,
           platformShareMinor,
+          cashoutEligible: j.cashoutEligible === true,
+          settlementSource: j.settlementSource ?? '',
         };
       });
   }
@@ -599,6 +651,10 @@ export class LedgerService {
 
     for (const journal of this.store.listJournals()) {
       if (journal.currency !== currency) continue;
+      // Simulated / unreconciled journals never feed cashout availability.
+      if (journal.cashoutEligible === false) continue;
+      // Ad payables require an explicit cashoutable reconcile (not SSV simulate / legacy).
+      if (journal.kind === 'ad_settlement' && journal.cashoutEligible !== true) continue;
       const age = now - new Date(journal.at).getTime();
       for (const line of journal.lines) {
         if (line.account !== account) continue;
@@ -617,7 +673,7 @@ export class LedgerService {
         (c) =>
           c.creatorUid === creatorUid &&
           c.currency === currency &&
-          (c.status === 'requested' || c.status === 'approved'),
+          IN_FLIGHT_CASHOUT.includes(c.status),
       )
       .reduce((sum, c) => sum + c.amountMinor, 0);
 
@@ -700,23 +756,33 @@ export class LedgerService {
 
   decideCashout(input: {
     id: string;
-    status: Extract<CashoutStatus, 'approved' | 'rejected' | 'settled' | 'failed'>;
+    status: Extract<
+      CashoutStatus,
+      | 'approved'
+      | 'processing'
+      | 'provider_confirmed'
+      | 'settled'
+      | 'failed'
+      | 'rejected'
+      | 'reversed'
+    >;
     actorEmail: string;
     providerRef?: string;
     failureReason?: string;
   }): CashoutRequest {
     const row = this.store.getCashout(input.id);
     if (!row) throw new NotFoundException(`Cashout ${input.id} not found`);
+    const now = new Date().toISOString();
 
     if (input.status === 'rejected' || input.status === 'failed') {
-      if (row.status === 'settled') {
-        throw new BadRequestException('Settled cashouts cannot be rejected');
+      if (row.status === 'settled' || row.status === 'reversed') {
+        throw new BadRequestException(`Cannot mark ${input.status} from ${row.status}`);
       }
       row.status = input.status;
       row.failureReason = input.failureReason;
-      row.decidedAt = new Date().toISOString();
+      row.decidedAt = now;
       row.decidedBy = input.actorEmail;
-      row.updatedAt = row.decidedAt;
+      row.updatedAt = now;
       if (input.providerRef) row.providerRef = input.providerRef;
       this.store.saveCashout(row);
       return row;
@@ -727,18 +793,67 @@ export class LedgerService {
         throw new BadRequestException(`Cannot approve cashout in status ${row.status}`);
       }
       row.status = 'approved';
-      row.decidedAt = new Date().toISOString();
+      row.decidedAt = now;
       row.decidedBy = input.actorEmail;
-      row.updatedAt = row.decidedAt;
+      row.updatedAt = now;
       if (input.providerRef) row.providerRef = input.providerRef;
       this.store.saveCashout(row);
       return row;
     }
 
-    // settled — debit creator payable; cash leaves for net; fee retained as revenue
+    if (input.status === 'processing') {
+      if (row.status !== 'approved' && row.status !== 'processing') {
+        throw new BadRequestException(
+          `Cashout must be approved before processing (now ${row.status})`,
+        );
+      }
+      // Sandbox rail adapter: record instruction only — no live MoMo/bank send yet.
+      row.status = 'processing';
+      row.processingAt = now;
+      row.decidedBy = input.actorEmail;
+      row.updatedAt = now;
+      row.providerRef =
+        input.providerRef ||
+        row.providerRef ||
+        `pending_${row.rail}_${row.id.slice(0, 10)}`;
+      this.store.saveCashout(row);
+      return row;
+    }
+
+    if (input.status === 'provider_confirmed') {
+      if (row.status !== 'processing' && row.status !== 'provider_confirmed') {
+        throw new BadRequestException(
+          `Provider confirm requires processing status (now ${row.status})`,
+        );
+      }
+      const providerRef = (input.providerRef || row.providerRef || '').trim();
+      if (!providerRef) {
+        throw new BadRequestException(
+          'providerRef is required to confirm disbursement with the rail',
+        );
+      }
+      row.status = 'provider_confirmed';
+      row.providerConfirmed = true;
+      row.providerConfirmedAt = now;
+      row.providerRef = providerRef;
+      row.decidedBy = input.actorEmail;
+      row.updatedAt = now;
+      this.store.saveCashout(row);
+      return row;
+    }
+
+    if (input.status === 'reversed') {
+      throw new BadRequestException(
+        'Cashout reversal journals are not automated yet — handle via finance adjustment',
+      );
+    }
+
+    // settled — ledger debit only after verified provider confirmation
     if (row.status === 'settled' && row.journalId) return row;
-    if (row.status === 'rejected' || row.status === 'failed') {
-      throw new BadRequestException(`Cannot settle cashout in status ${row.status}`);
+    if (row.status !== 'provider_confirmed' || !row.providerConfirmed) {
+      throw new BadRequestException(
+        'Cashout may only settle after provider_confirmed with a providerRef',
+      );
     }
 
     const lines: LedgerLine[] = [
@@ -773,14 +888,17 @@ export class LedgerService {
       memo: `Creator cashout ${row.id}`,
       creatorUid: row.creatorUid,
       providerRef: input.providerRef || row.providerRef,
+      cashoutEligible: true,
+      settlementSource: 'payment',
     });
 
     row.status = 'settled';
     row.journalId = journal.id;
-    row.providerRef = input.providerRef || row.providerRef || `cashout_${row.id}`;
-    row.decidedAt = new Date().toISOString();
+    row.settledAt = now;
+    row.providerRef = input.providerRef || row.providerRef;
+    row.decidedAt = now;
     row.decidedBy = input.actorEmail;
-    row.updatedAt = row.decidedAt;
+    row.updatedAt = now;
     this.store.saveCashout(row);
     return row;
   }

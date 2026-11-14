@@ -178,7 +178,18 @@ export function getPayouts(token: string) {
   return request<{ items: Array<Record<string, string | number>> }>('/v1/admin/payouts', {}, token);
 }
 
-export function decidePayout(token: string, id: string, status: string, reference?: string) {
+export function decidePayout(
+  token: string,
+  id: string,
+  status:
+    | 'approved'
+    | 'processing'
+    | 'provider_confirmed'
+    | 'settled'
+    | 'rejected'
+    | 'failed',
+  reference?: string,
+) {
   return request(`/v1/admin/payouts/${id}/decision`, {
     method: 'POST',
     body: JSON.stringify({ status, reference }),

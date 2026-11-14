@@ -182,19 +182,19 @@ export class StudioController {
 
   @Get('sales')
   sales(@CurrentUser() user: AuthUser) {
+    // Read-only: never mutate the ledger from a GET.
     const dashboard = this.studio.salesFor(user.uid, user.email);
-    // Lift legacy Studio-only lines (grants, pool, pre-ledger ads) onto payables.
-    this.ledger.backfillStudioSales(dashboard.sales);
     const bal = this.ledger.creatorBalance(user.uid, dashboard.currency);
-    // Cashout truth always comes from the ledger once anything has posted.
+    // Cashout truth always comes from cashoutable ledger journals.
     if (bal.earnedMinor > 0 || bal.paidOutMinor > 0 || bal.inFlightMinor > 0) {
       return {
         ...dashboard,
-        grossSalesMinor: Math.max(dashboard.grossSalesMinor, bal.earnedMinor),
+        // Statement / by-format stay on Studio lines; cashout figures from ledger only.
         availableMinor: bal.availableMinor,
         pendingMinor: bal.pendingHoldMinor + bal.inFlightMinor,
         paidOutMinor: bal.paidOutMinor,
         holdDays: bal.holdDays,
+        cashoutableEarnedMinor: bal.earnedMinor,
         policy: {
           ...dashboard.policy,
           minPayoutMinor: bal.minPayoutMinor,
@@ -202,7 +202,14 @@ export class StudioController {
         ledger: bal,
       };
     }
-    return dashboard;
+    return {
+      ...dashboard,
+      availableMinor: 0,
+      pendingMinor: 0,
+      paidOutMinor: 0,
+      cashoutableEarnedMinor: 0,
+      note: 'By-format totals may include simulated/estimate lines. Cashout available is ledger-only.',
+    };
   }
 
   /** Keep live catalogue chapters/episodes in sync when the creator edits parts. */

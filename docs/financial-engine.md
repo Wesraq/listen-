@@ -3,8 +3,22 @@
 Prototype double-entry ledger shared by purchases, subscriptions, advertising, and creator cashouts. Mobile is untrusted for entitlements and payouts; Cloud Run `listen-api` is source of truth when reachable.
 
 **Live API:** `https://listen-api-851945155141.us-central1.run.app/v1`  
-**Revision (as of this doc):** `listen-api-00012+`  
 **Market / currency:** Zambia · ZMW (minor units = ngwee; 100 = ZMW 1.00)
+
+---
+
+## Integrity rules (release blockers addressed)
+
+| Rule | Enforcement |
+| --- | --- |
+| Mobile cannot grant paid entitlements | `ALLOW_CLIENT_GRANTS=false` (local + Cloud Run) |
+| Client `rewardEarned` never pays creators | `POST /ads/complete` is telemetry/UX only (`credited: false`) |
+| AdMob SSV must verify | ECDSA SHA-256 vs Google verifier keys; fresh timestamp; unique `transaction_id` |
+| Fixed `AD_GROSS_MINOR` is not Google revenue | Labelled **SIMULATED**; journals `cashoutEligible: false` |
+| Cashoutable ads only from reconciliation | `POST /admin/ads/reconcile` with reported gross |
+| Processing fees by provider | `processingFeeBpsFor(provider)` + optional `PROCESSING_FEE_BPS_JSON` |
+| Cashout ≠ admin click | Statuses include `processing` / `provider_confirmed`; ledger settle only after confirm |
+| GET must not mutate ledger | `GET /studio/sales` is read-only; migration is `POST /admin/finance/migrate-studio-sales` |
 
 ---
 
@@ -12,219 +26,156 @@ Prototype double-entry ledger shared by purchases, subscriptions, advertising, a
 
 | Layer | Role |
 | --- | --- |
-| `LedgerService` / `LedgerStore` | Double-entry journals; creator payable balances; cashout holds |
+| `LedgerService` / `LedgerStore` | Double-entry journals; cashoutable creator balances; cashout lifecycle |
 | `PaymentsService` | Payment intents → webhook/confirm → `settleTitlePurchase` → library grant |
-| `AdsService` | Campaigns + AdMob complete/SSV → `settleAdvertising` → Studio earning mirror |
-| `ConsumptionService` | Qualified listen/read minutes → Studio sale + `settleStudioSale` |
-| `StudioStore.sales` | Creator-facing statement lines + by-format totals |
-| Admin Finance tab | Cashout queue + advertising settlement list |
+| `AdsService` | Campaigns; client complete (non-paying); SSV verify; admin reconcile |
+| `ConsumptionService` | Qualified minutes → Studio estimate (+ non-cashoutable journal optional) |
+| `StudioStore.sales` | Creator-facing statement / by-format (may include simulated lines) |
+| Admin Finance | Cashout lifecycle + ad settlements + fee schedule + migrations |
 
-Persistence: Firestore when `DATA_BACKEND=firestore` (collections under `FIRESTORE_PREFIX`, e.g. `listen` / `finance_journals`).
+Persistence: Firestore when `DATA_BACKEND=firestore`.
 
 ---
 
-## 2. Chart of accounts (ledger)
+## 2. Chart of accounts
 
-**System accounts**
-
-- `assets:processor_clearing`
-- `assets:platform_cash`
-- `liability:unallocated_receipts`
-- `liability:subscription_deferred`
-- `liability:creator_pool`
-- `revenue:content_sales`
-- `revenue:subscription`
-- `revenue:advertising`
-- `revenue:payout_fees`
-- `expense:processing_fees`
-- `expense:refunds`
-- `expense:payout_fees`
+System accounts include processor clearing, content/subscription/advertising revenue, processing and payout fee expense/revenue, creator pool, etc.
 
 **Per-creator:** `liability:creator_payable:{uid}`
 
-**Journal kinds:** `payment_settlement` · `subscription_settlement` · `ad_settlement` · `creator_earning` · `payout` · `refund` · `adjustment`
+**Journal metadata**
 
-Idempotency: `(referenceType, referenceId)` — e.g. `payment_intent` / intent id, `ad_completion` / client or SSV id, `studio_sale` / sale id, `cashout` / cashout id.
+- `cashoutEligible` — when `false`, excluded from cashout available/earned
+- `settlementSource` — e.g. `payment` · `ssv_simulated` · `ad_reconciled` · `studio_migration`
+
+**Idempotency:** `(referenceType, referenceId)`
 
 ---
 
 ## 3. Commercial splits & fees
 
-| Stream | Creator | Platform | Notes |
+| Stream | Creator | Platform | Cashoutable? |
 | --- | --- | --- | --- |
-| Title purchase | **70%** of net | **30%** of net | Net = gross − **3%** processing fee (`processingFeeBps` 300) |
-| Subscription pool | **60%** of pool credit | **40%** | Pool allocation from qualified minutes |
-| Advertising | **55%** of gross ad credit | **45%** | Verified AdMob reward / SSV only |
-| Format weights (sub pool UI) | ebook 30% · audiobook 45% · podcast 25% | — | Display / allocation policy in Studio |
+| Title purchase | 70% of net | 30% of net | Yes (after verified payment) |
+| Subscription pool estimates | 60% | 40% | No until reconciled funding |
+| Advertising (SSV simulate) | 55% of **simulated** gross | 45% | **No** |
+| Advertising (admin reconcile) | 55% of **reported** gross | 45% | Yes |
+
+**Provider processing fees (bps of gross, before royalty split)**
+
+| Provider | Default bps | Notes |
+| --- | --- | --- |
+| `simulate` | 300 (3%) | Sandbox |
+| `mtn_momo` | 250 | Provisional — replace with contracted rate |
+| `airtel_money` | 250 | Provisional |
+| `card` | 350 | Provisional |
+
+Override: `PROCESSING_FEE_BPS_JSON={"simulate":300,"mtn_momo":250,...}`  
+Reconcile against provider settlement statements before production.
 
 **Cashout**
 
 | Rule | Value |
 | --- | --- |
-| Hold window | **7 days** after payable credit |
-| Minimum payout | **ZMW 50.00** (`5000` minor) |
-| Payout fee | **ZMW 2.00** flat (creator-paid, retained as `revenue:payout_fees`) |
+| Hold | 7 days on cashoutable credits |
+| Minimum | ZMW 50.00 |
+| Fee | ZMW 2.00 flat |
 | Rails | `mtn_momo` · `airtel_money` · `bank` |
 
-**Balances**
+**Lifecycle**
 
-- **Earned** = credits to creator payable  
-- **On hold** = credits younger than 7 days (+ in-flight cashout requests)  
-- **Cashout available** = earned − paid out − hold − in-flight  
-- Studio **by format** = sum of Studio sale lines (mirrors ledger for new settlements; history may include pre-ledger rows that are backfilled on `GET /studio/sales`)
+`requested` → `approved` → `processing` → `provider_confirmed` → `settled`  
+Also: `failed` · `rejected` · `reversed` (reversal journaling not automated yet)
+
+- **approved** = finance OK to disburse (no money moved)  
+- **processing** = instruction recorded for rail adapter (live MoMo/bank send not wired)  
+- **provider_confirmed** = requires `providerRef` from rail/webhook/statement  
+- **settled** = ledger debit of creator payable — **only** from `provider_confirmed`
 
 ---
 
 ## 4. Payments
 
-**Providers (intent field):** `simulate` · `mtn_momo` · `airtel_money` · `card`  
-**Mode:** `PAYMENTS_MODE=simulate` (sandbox adapters; MoMo/card UX paths exist, live keys not connected)
+**Env**
 
-**Env (local `apps/api/.env` + Cloud Run)**
-
-| Variable | Local | Cloud Run deploy |
+| Variable | Local | Cloud Run |
 | --- | --- | --- |
 | `PAYMENTS_MODE` | `simulate` | `simulate` |
 | `ALLOW_SIMULATED_PAYMENTS` | `true` | `true` |
-| `ALLOW_CLIENT_GRANTS` | `false` | `true` (prototype) |
-| `PAYMENT_WEBHOOK_SECRET` | set locally | from deploy env / default placeholder — set real secret before live webhooks |
-| `AD_GROSS_MINOR` | `50` | `50` (override via shell when deploying) |
+| `ALLOW_CLIENT_GRANTS` | **`false`** | **`false`** |
+| `PAYMENT_WEBHOOK_SECRET` | set locally | set on deploy |
 
-**Endpoints**
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/v1/payments/intents` | Create intent (title purchase or subscription) |
-| `POST` | `/v1/payments/intents/:id/confirm` | Sandbox confirm when `ALLOW_SIMULATED_PAYMENTS=true` |
-| `POST` | `/v1/payments/webhooks` | Provider webhook (HMAC / shared secret) |
-
-On success: ledger `settleTitlePurchase` → Studio `recordEarning` (note includes `Ledger {journalId}`) → library grant with `skipEarning`.
+**Endpoints:** `POST /v1/payments/intents` · `…/confirm` · `…/webhooks`
 
 ---
 
-## 5. Cashouts
+## 5. Advertising
 
-**Creator**
-
-| Method | Path |
+| Variable | Meaning |
 | --- | --- |
-| `GET` | `/v1/finance/me/balances` |
-| `GET` | `/v1/finance/me/cashouts` |
-| `POST` | `/v1/finance/me/cashouts` |
+| `AD_GROSS_MINOR` | Simulated ZMW minor per SSV (default 50) — **not** AdMob revenue |
+| `ADS_SETTLEMENT_MODE` | `simulate` (default) · `off` · `reconciled` |
 
-Studio Earnings → Request payout (blocked if available &lt; min).
+**Client** `POST /v1/ads/complete` — never creates payables (`rewardEarned` ignored for money).
 
-**Admin**
+**SSV** `GET/POST /v1/ads/ssv`
 
-| Method | Path |
-| --- | --- |
-| `GET` | `/v1/admin/payouts` |
-| `POST` | `/v1/admin/payouts/:id/decision` | body `status`: `approved` · `rejected` · `settled` |
+1. Verify signature against `https://www.gstatic.com/admob/reward/verifier-keys.json`
+2. Reject stale `timestamp` (>10 minutes)
+3. Reject replayed `transaction_id` (memory + ledger idempotency)
+4. If `simulate`: post **non-cashoutable** illustrative journal  
+5. If `reconciled` / `off`: verify only; no fixed-gross payable
 
-Statuses: `requested` → `approved` → `settled` (or `rejected` / `failed`). Settlement debits creator payable and credits clearing / payout fee revenue.
+**Cashoutable ads:** `POST /v1/admin/ads/reconcile` with `reportedGrossMinor` from network reporting.
 
----
+**SSV URL:** `https://listen-api-851945155141.us-central1.run.app/v1/ads/ssv`
 
-## 6. Advertising
-
-**Campaign (seeded):** `network_default` — Listen+ / AdMob rewarded network  
-**Gross per verified completion:** `AD_GROSS_MINOR` (default **50** = ZMW 0.50)  
-**Hourly cap:** **3** completions per listener  
-**Placements:** preroll · midroll · chapter (reader)
-
-**Endpoints**
-
-| Method | Path | Auth |
-| --- | --- | --- |
-| `GET` | `/v1/ads/campaigns` | public |
-| `POST` | `/v1/ads/complete` | Bearer — requires `rewardEarned: true` for AdMob source |
-| `GET`/`POST` | `/v1/ads/ssv` | AdMob SSV callback (configure in AdMob console) |
-
-**SSV URL to set in AdMob:**  
-`https://listen-api-851945155141.us-central1.run.app/v1/ads/ssv`  
-Client `custom_data`: `titleId|placement|listenerUid`
-
-Settlement: `settleAdvertising` (55/45) → Studio earning with `ledger` in note. Titles must be `free_with_ads` and have `creatorUid`.
-
-**Mobile AdMob** (`apps/mobile/lib/config/ad_config.dart`)
-
-- Default: **Google test** app/unit IDs (`ADMOB_USE_TEST_ADS` default `true`)
-- Production via `--dart-define=ADMOB_*` + Info.plist / AndroidManifest app IDs
-- Bundle / application: iOS `io.listen.listen` · Android `com.listenplus.listen_plus`
-- Flow: rewarded interstitial → `POST /ads/complete` with `rewardEarned: true`
+Mobile AdMob defaults remain Google **test** IDs until production dart-defines.
 
 ---
 
-## 7. Studio earnings alignment
+## 6. Studio earnings (read-only)
 
 `GET /v1/studio/sales`:
 
-1. Loads Studio sale lines for the creator  
-2. **Backfills** lines not already on the ledger (skips notes containing `ledger`; idempotent `studio_sale` refs)  
-3. Returns **cashout available / on hold** from `creatorBalance`  
-4. Hero total = max(Studio creator-share sum, ledger earned)  
-5. By-format cards from Studio lines (ebook / audiobook / podcast / advertising)
+- Returns Studio statement lines + by-format (may include simulated advertising)
+- Overlays **cashout available / on hold / paid out** from cashoutable ledger only
+- **Does not** create journals
 
-UI labels: “Creator share earned”, “Cashout available”, “On hold (Nd)”.
+**Migration (admin only):** `POST /v1/admin/finance/migrate-studio-sales`  
+`{ "creatorUid": "…", "cashoutEligible": false }`  
+Default non-cashoutable; set `cashoutEligible: true` only after finance sign-off that funds exist.
 
 ---
 
-## 8. Admin ops console
+## 7. Admin
 
-`apps/admin-web` · seeded admin (`ADMIN_EMAIL` / `ADMIN_PASSWORD` in local `.env` only — not committed).
-
-| Surface | Behaviour |
+| Path | Purpose |
 | --- | --- |
-| Overview | Pending creators, moderation, payout queue, **ad settlements count**, **ad platform share** |
-| Finance | Cashout approve / settle / reject + **Advertising settlements** table |
-| `GET /v1/admin/ads` | Recent `ad_settlement` journals |
+| `GET /admin/payouts` | Queue + lifecycle note |
+| `POST /admin/payouts/:id/decision` | `approved` · `processing` · `provider_confirmed` · `settled` · `rejected` · `failed` |
+| `GET /admin/ads` | Settlements + campaign mode + fee schedule |
+| `POST /admin/ads/reconcile` | Cashoutable ad attribution from reported gross |
+| `POST /admin/finance/migrate-studio-sales` | Controlled Studio→ledger migration |
+| `GET /admin/finance/fee-schedule` | Provider fee bps |
 
 ---
 
-## 9. Auth, data, media (supporting)
+## 8. Not live yet
 
-| Variable | Configured |
-| --- | --- |
-| `AUTH_MODE` | local `firebase` · Cloud Run `hybrid` |
-| `FIREBASE_PROJECT_ID` | `listenplus-d9188` |
-| `DATA_BACKEND` | `firestore` |
-| `MEDIA_BACKEND` | `firebase` |
-| `FIRESTORE_PREFIX` | `listen` |
-| `MEDIA_REQUIRE_SIGNED` | local `true` |
-| Firebase iOS | configured (`io.listen.listen`) |
-| Android `google-services.json` | not in repo until provided |
-
-Mobile API base: release builds default to Cloud Run (`ApiConfig.publicDevHost`); override with `--dart-define=LISTEN_API_BASE=…`.
+- Real MTN MoMo / Airtel / card disbursement APIs (processing status is adapter-ready, not live send)
+- AdMob production app/unit IDs
+- Automated pull of AdMob mediation reports into reconcile
+- Cashout `reversed` automated journals
+- Postgres as system of record
 
 ---
 
-## 10. Git milestones (finance track)
+## 9. Verify quickly
 
-| Commit | Summary |
-| --- | --- |
-| `e3caf67` | Financial ledger + multi-rail payment intents |
-| `5db4846` | Sandbox payment confirms on Cloud Run |
-| `83f43a4` | Creator cashouts through shared ledger |
-| `348f4fa` | Ads settle on ledger + admin visibility |
-| `8fd55a7` | Studio cashout balances aligned / backfill |
-
----
-
-## 11. Not live yet (explicit)
-
-- Real MTN MoMo / Airtel Money / card processor keys and production webhooks  
-- Advertiser self-serve campaign UI (seed campaign only)  
-- AdMob **production** app/unit IDs + SSV signature verification hardening  
-- Direct AdMob → creator payout (AdMob pays publisher; creator split is internal ledger only)  
-- Postgres as system of record (`DATABASE_URL` kept for local fallback only)  
-- Refund / reversal journals end-to-end in product UI  
-
----
-
-## 12. How to verify quickly
-
-1. Purchase (simulate confirm) → Studio sale + ledger payable + library own  
-2. Free-with-ads title → watch rewarded ad → Advertising format total ↑ · hold/available update  
-3. Refresh Studio Earnings → backfill runs; cashout available reflects aged credits  
-4. Request payout ≥ ZMW 50 available → admin Finance approve → settle  
-5. `GET /v1/ads/campaigns` → `network_default` with `grossMinor: 50`
+1. `POST /library/owned/:id` with Bearer → **403** (client grants off)  
+2. `POST /ads/complete` with `rewardEarned: true` → `credited: false`, no cashout bump  
+3. SSV without valid signature → **401**  
+4. SSV simulate → Studio advertising may rise; **cashout available** unchanged  
+5. Admin reconcile with reported gross → cashoutable earned increases (after hold)  
+6. Cashout: cannot `settled` until `provider_confirmed` + `providerRef`

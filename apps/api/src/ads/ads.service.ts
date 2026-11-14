@@ -1,46 +1,66 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 import { CatalogueService } from '../catalogue/catalogue.service';
 import { LedgerService } from '../finance/ledger.service';
 import { StudioStore } from '../studio/studio.store';
+import {
+  assertFreshSsvTimestamp,
+  safeIncludes,
+  verifyAdMobSsvQuery,
+} from './ssv-verifier';
 
 /**
- * Illustrative gross receipt per verified AdMob reward (ZMW minor units).
- * Replace with AdMob Mediation / network reconciliation once live.
+ * Prototype / simulated gross per SSV callback (ZMW minor units).
+ * NOT AdMob network revenue. Must never create cashoutable payables.
  */
-const AD_GROSS_MINOR = Number(process.env.AD_GROSS_MINOR ?? 50); // ZMW 0.50
+const AD_GROSS_MINOR = Number(process.env.AD_GROSS_MINOR ?? 50);
+
+/**
+ * - simulate: SSV-verified completions post illustrative journals (cashoutEligible=false)
+ * - off: SSV verifies + records receipt only (no creator journal)
+ * - reconciled: fixed AD_GROSS forbidden; use admin reconcile with reported amounts
+ */
+type AdsSettlementMode = 'simulate' | 'off' | 'reconciled';
+
+function adsSettlementMode(): AdsSettlementMode {
+  const raw = (process.env.ADS_SETTLEMENT_MODE ?? 'simulate').toLowerCase();
+  if (raw === 'off' || raw === 'reconciled') return raw;
+  return 'simulate';
+}
 
 export interface AdCampaign {
   id: string;
   name: string;
   status: 'active' | 'paused' | 'ended';
-  /** Who pays Listen+ for the inventory (platform network until advertisers onboard). */
   advertiser: string;
   placements: Array<'preroll' | 'midroll' | 'chapter'>;
-  /** Gross credit per verified completion (minor units). */
-  grossMinor: number;
+  /** Simulated gross only — not network settlement. */
+  simulatedGrossMinor: number;
   currency: string;
+  cashoutEligible: false;
 }
 
 @Injectable()
 export class AdsService {
-  /** listenerKey -> completion timestamps (ms) for hourly caps. */
   private readonly completions = new Map<string, number[]>();
-  /** AdMob SSV transaction ids already credited (idempotency). */
+  /** Persisted via ledger idempotency; in-memory set for fast replay reject. */
   private readonly ssvTransactions = new Set<string>();
-  /** Recent credit fingerprints to avoid client+SSV double ledger posts. */
-  private readonly recentCredits = new Map<string, number>();
 
-  /** Seed campaigns — advertiser self-serve lands on this same model. */
   private readonly campaigns: AdCampaign[] = [
     {
       id: 'network_default',
-      name: 'Listen+ rewarded network',
+      name: 'Listen+ rewarded network (simulated gross)',
       status: 'active',
       advertiser: 'Listen+ / AdMob',
       placements: ['preroll', 'midroll', 'chapter'],
-      grossMinor: AD_GROSS_MINOR,
+      simulatedGrossMinor: AD_GROSS_MINOR,
       currency: 'ZMW',
+      cashoutEligible: false,
     },
   ];
 
@@ -51,13 +71,22 @@ export class AdsService {
   ) {}
 
   listCampaigns() {
+    const mode = adsSettlementMode();
     return {
       items: this.campaigns.filter((c) => c.status === 'active'),
       ssvUrlHint: '/v1/ads/ssv',
-      note: 'Advertiser campaign management will create rows here; completions settle on the shared ledger.',
+      settlementMode: mode,
+      note:
+        mode === 'reconciled'
+          ? 'Creator advertising payables require reconciled AdMob/network receipts — not client rewards or fixed AD_GROSS.'
+          : 'AD_GROSS_MINOR is a SIMULATED prototype amount, not Google revenue. SSV-verified simulate journals are not cashoutable.',
     };
   }
 
+  /**
+   * Client telemetry / UX only. Never posts ledger creator payables.
+   * `rewardEarned` is untrusted and is ignored for money movement.
+   */
   complete(input: {
     listenerUid: string;
     titleId: string;
@@ -68,66 +97,193 @@ export class AdsService {
     rewardEarned?: boolean;
     campaignId?: string;
   }) {
-    const fromAdMob = (input.source ?? 'admob') === 'admob' && input.rewardEarned === true;
-    if (!fromAdMob && input.completedSec < 5) {
-      throw new BadRequestException('Ad must play at least 5 seconds to monetise');
-    }
-    if ((input.source ?? '') === 'admob' && input.rewardEarned !== true) {
-      throw new BadRequestException('AdMob completion requires a rewarded callback');
+    const title = this.catalogue.getTitle(input.titleId);
+    const mode = title.monetisationMode ?? (title.priceMinor === 0 ? 'free_with_ads' : 'purchase');
+    if (mode !== 'free_with_ads') {
+      throw new BadRequestException('Advertising is only enabled for free-with-ads titles');
     }
 
-    const minuteBucket = Math.floor(Date.now() / 60_000);
-    return this.credit({
-      listenerUid: input.listenerUid,
-      titleId: input.titleId,
+    const key = input.listenerUid;
+    const now = Date.now();
+    const hourAgo = now - 60 * 60 * 1000;
+    const recent = (this.completions.get(key) ?? []).filter((t) => t >= hourAgo);
+    if (recent.length >= 3) {
+      throw new BadRequestException('Hourly ad cap reached (max 3 completed ads)');
+    }
+    recent.push(now);
+    this.completions.set(key, recent);
+
+    return {
+      ok: true,
+      credited: false,
+      cashoutEligible: false,
       placement: input.placement,
-      campaignId: input.campaignId,
-      referenceId: `client:${input.listenerUid}:${input.titleId}:${input.placement}:${minuteBucket}`,
-      noteExtra: fromAdMob
-        ? `AdMob rewarded · ${input.placement}`
-        : `Verified ${input.placement} · ${input.completedSec}s`,
-    });
+      campaignId: input.campaignId ?? 'network_default',
+      creatorShareMinor: 0,
+      platformShareMinor: 0,
+      currency: title.currency || 'ZMW',
+      hourlyCompletions: recent.length,
+      hourlyCap: 3,
+      note:
+        'Client /ads/complete never settles advertising payables. Configure AdMob SSV; only verified SSV (or reconciled receipts) may create journals.',
+    };
   }
 
   /**
    * AdMob Server-Side Verification callback.
-   * Configure: Rewarded interstitial → SSV URL → https://<api-host>/v1/ads/ssv
+   * Requires valid ECDSA signature, fresh timestamp, and unique transaction_id.
    */
-  ssv(query: Record<string, string | undefined>) {
+  async ssv(input: {
+    query: Record<string, string | undefined>;
+    rawQuery: string;
+  }) {
+    const { query, rawQuery } = input;
+    if (!rawQuery || !rawQuery.includes('signature=')) {
+      throw new BadRequestException('SSV requires the original signed query string');
+    }
+
+    const verified = await verifyAdMobSsvQuery(rawQuery);
+    if (!verified.ok) {
+      throw new UnauthorizedException(verified.reason ?? 'Invalid AdMob SSV signature');
+    }
+
+    const fresh = assertFreshSsvTimestamp(query.timestamp);
+    if (!fresh.ok) {
+      throw new BadRequestException(fresh.reason);
+    }
+
     const transactionId = query.transaction_id ?? query.transactionId ?? '';
-    const customData = query.custom_data ?? query.customData ?? '';
     if (!transactionId) {
       throw new BadRequestException('Missing transaction_id');
     }
-    if (this.ssvTransactions.has(transactionId)) {
-      return { ok: true, duplicate: true };
+    if (safeIncludes(this.ssvTransactions, transactionId)) {
+      return { ok: true, duplicate: true, credited: false, transactionId };
+    }
+    // Ledger idempotency is authoritative across instances.
+    if (this.ledgerHasAdCompletion(`ssv:${transactionId}`)) {
+      this.ssvTransactions.add(transactionId);
+      return { ok: true, duplicate: true, credited: false, transactionId };
     }
 
-    // custom_data is set by the client as titleId|placement|listenerUid
+    const customData = query.custom_data ?? query.customData ?? '';
     const [titleId = '', placementRaw = 'preroll', listenerUid = 'ssv'] = customData.split('|');
     const placement = placementRaw === 'midroll' ? 'midroll' : 'preroll';
     if (!titleId) {
       throw new BadRequestException('custom_data must include titleId');
     }
 
-    const result = this.credit({
+    const mode = adsSettlementMode();
+    if (mode === 'reconciled') {
+      this.ssvTransactions.add(transactionId);
+      return {
+        ok: true,
+        credited: false,
+        cashoutEligible: false,
+        transactionId,
+        note: 'SSV verified. ADS_SETTLEMENT_MODE=reconciled — post creator payables only via admin ad reconciliation with reported network amounts.',
+      };
+    }
+
+    if (mode === 'off') {
+      this.ssvTransactions.add(transactionId);
+      return {
+        ok: true,
+        credited: false,
+        cashoutEligible: false,
+        transactionId,
+        note: 'SSV verified. ADS_SETTLEMENT_MODE=off — no ledger journal.',
+      };
+    }
+
+    // simulate — illustrative only
+    const result = this.creditSimulatedSsv({
       listenerUid,
       titleId,
       placement,
-      referenceId: `ssv:${transactionId}`,
-      noteExtra: `AdMob SSV · ${transactionId.slice(0, 12)}`,
+      transactionId,
     });
     this.ssvTransactions.add(transactionId);
     return { ...result, transactionId, duplicate: false };
   }
 
-  private credit(input: {
+  /**
+   * Admin path: attribute creator share from reconciled network receipts
+   * (AdMob reporting / mediation), not from fixed AD_GROSS or client flags.
+   */
+  reconcileReportedEarning(input: {
+    referenceId: string;
+    listenerUid?: string;
+    creatorUid: string;
+    titleId: string;
+    currency: string;
+    /** Actual attributable gross in minor units from reconciliation. */
+    reportedGrossMinor: number;
+    campaignId?: string;
+    placement?: string;
+    reportSource: string;
+  }) {
+    if (input.reportedGrossMinor <= 0) {
+      throw new BadRequestException('reportedGrossMinor must be positive');
+    }
+    const title = this.catalogue.getTitle(input.titleId);
+    const creatorUid = input.creatorUid || title.creatorUid;
+    if (!creatorUid) throw new BadRequestException('creatorUid required');
+
+    const settled = this.ledger.settleAdvertising({
+      referenceId: `reconcile:${input.referenceId}`,
+      customerUid: input.listenerUid || 'reconcile',
+      creatorUid,
+      titleId: input.titleId,
+      currency: input.currency || title.currency || 'ZMW',
+      grossMinor: input.reportedGrossMinor,
+      campaignId: input.campaignId ?? 'network_default',
+      placement: input.placement,
+      cashoutEligible: true,
+      settlementSource: 'ad_reconciled',
+    });
+
+    if (settled.created) {
+      const format =
+        title.format === 'audiobook' || title.format === 'ebook_audio'
+          ? 'audiobook'
+          : title.format === 'podcast'
+            ? 'podcast'
+            : 'ebook';
+      this.studio.recordEarning({
+        creatorUid,
+        titleId: title.id,
+        titleName: title.name,
+        currency: settled.journal.currency,
+        grossMinor: input.reportedGrossMinor,
+        deductionsMinor: 0,
+        market: 'ZM',
+        stream: 'advertising',
+        format,
+        note: `Reconciled ${input.reportSource} · ledger ${settled.journal.id}`,
+      });
+    }
+
+    return {
+      ok: true,
+      cashoutEligible: true,
+      journalId: settled.journal.id,
+      created: settled.created,
+      creatorShareMinor: settled.creatorShareMinor,
+      platformShareMinor: settled.platformShareMinor,
+    };
+  }
+
+  private ledgerHasAdCompletion(referenceId: string): boolean {
+    return this.ledger
+      .recentJournals(5000)
+      .some((j) => j.referenceType === 'ad_completion' && j.referenceId === referenceId);
+  }
+
+  private creditSimulatedSsv(input: {
     listenerUid: string;
     titleId: string;
     placement: 'preroll' | 'midroll';
-    referenceId: string;
-    noteExtra: string;
-    campaignId?: string;
+    transactionId: string;
   }) {
     const title = this.catalogue.getTitle(input.titleId);
     const mode = title.monetisationMode ?? (title.priceMinor === 0 ? 'free_with_ads' : 'purchase');
@@ -138,50 +294,19 @@ export class AdsService {
       throw new BadRequestException('Title has no creator to credit');
     }
 
-    const campaign =
-      this.campaigns.find((c) => c.id === (input.campaignId || 'network_default')) ??
-      this.campaigns[0];
-    if (!campaign || campaign.status !== 'active') {
-      throw new BadRequestException('No active ad campaign');
-    }
-
-    const key = input.listenerUid;
-    const now = Date.now();
-    const fingerprint = `${input.listenerUid}:${input.titleId}:${input.placement}`;
-    const lastSame = this.recentCredits.get(fingerprint) ?? 0;
-    if (now - lastSame < 90_000) {
-      return {
-        ok: true,
-        placement: input.placement,
-        campaignId: campaign.id,
-        creatorShareMinor: 0,
-        platformShareMinor: 0,
-        currency: title.currency || campaign.currency,
-        hourlyCompletions: (this.completions.get(key) ?? []).length,
-        hourlyCap: 3,
-        duplicate: true,
-      };
-    }
-
-    const hourAgo = now - 60 * 60 * 1000;
-    const recent = (this.completions.get(key) ?? []).filter((t) => t >= hourAgo);
-    if (recent.length >= 3) {
-      throw new BadRequestException('Hourly ad cap reached (max 3 completed ads)');
-    }
-    recent.push(now);
-    this.completions.set(key, recent);
-    this.recentCredits.set(fingerprint, now);
-
+    const campaign = this.campaigns[0];
     const currency = title.currency || campaign.currency;
     const settled = this.ledger.settleAdvertising({
-      referenceId: input.referenceId,
+      referenceId: `ssv:${input.transactionId}`,
       customerUid: input.listenerUid,
       creatorUid: title.creatorUid,
       titleId: title.id,
       currency,
-      grossMinor: campaign.grossMinor,
+      grossMinor: campaign.simulatedGrossMinor,
       campaignId: campaign.id,
       placement: input.placement,
+      cashoutEligible: false,
+      settlementSource: 'ssv_simulated',
     });
 
     const format =
@@ -197,26 +322,26 @@ export class AdsService {
         titleId: title.id,
         titleName: title.name,
         currency,
-        grossMinor: campaign.grossMinor,
+        grossMinor: campaign.simulatedGrossMinor,
         deductionsMinor: 0,
         market: 'ZM',
         stream: 'advertising',
         format,
-        note: `${input.noteExtra} · ledger ${settled.journal.id} · listener ${input.listenerUid.slice(0, 8)}`,
+        note: `SIMULATED SSV · ${input.transactionId.slice(0, 12)} · ledger ${settled.journal.id} (not cashoutable)`,
       });
     }
 
     return {
       ok: true,
+      credited: settled.created,
+      cashoutEligible: false,
       placement: input.placement,
       campaignId: campaign.id,
       creatorShareMinor: settled.creatorShareMinor,
       platformShareMinor: settled.platformShareMinor,
       currency,
       journalId: settled.journal.id,
-      hourlyCompletions: recent.length,
-      hourlyCap: 3,
-      duplicate: !settled.created,
+      note: 'Simulated AD_GROSS posted for observability only — excluded from cashout balances.',
     };
   }
 }

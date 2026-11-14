@@ -11,9 +11,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { AdsService } from '../ads/ads.service';
 import { CatalogueService } from '../catalogue/catalogue.service';
 import { LedgerService } from '../finance/ledger.service';
 import { LibraryStore } from '../library/library.store';
+import { listProcessingFeeSchedule } from '../payments/processing-fees';
 import { StudioStore } from '../studio/studio.store';
 import { AdminGuard, ADMIN_SESSION_KEY } from './admin.guard';
 import { AdminStore } from './admin.store';
@@ -27,6 +29,7 @@ export class AdminController {
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
     @Inject(LibraryStore) private readonly library: LibraryStore,
     @Inject(LedgerService) private readonly ledger: LedgerService,
+    @Inject(AdsService) private readonly adsService: AdsService,
   ) {}
 
   @Post('auth/login')
@@ -61,8 +64,91 @@ export class AdminController {
 
   @Get('ads')
   @UseGuards(AdminGuard)
-  ads() {
-    return { items: this.ledger.listAdSettlements(100) };
+  listAds() {
+    return {
+      items: this.ledger.listAdSettlements(100),
+      campaigns: this.adsService.listCampaigns(),
+      processingFeesBps: listProcessingFeeSchedule(),
+    };
+  }
+
+  /**
+   * Attribute cashoutable advertising from reconciled network receipts only.
+   * Never call this with the fixed AD_GROSS prototype amount unless that amount
+   * is proven from a settlement statement.
+   */
+  @Post('ads/reconcile')
+  @UseGuards(AdminGuard)
+  reconcileAd(
+    @Body()
+    body: {
+      referenceId?: string;
+      creatorUid?: string;
+      titleId?: string;
+      currency?: string;
+      reportedGrossMinor?: number;
+      reportSource?: string;
+      campaignId?: string;
+      placement?: string;
+      listenerUid?: string;
+    },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const result = this.adsService.reconcileReportedEarning({
+      referenceId: body.referenceId?.trim() || `manual_${Date.now()}`,
+      creatorUid: body.creatorUid?.trim() || '',
+      titleId: body.titleId?.trim() || '',
+      currency: body.currency || 'ZMW',
+      reportedGrossMinor: Number(body.reportedGrossMinor) || 0,
+      reportSource: body.reportSource?.trim() || `admin:${session.admin.email}`,
+      campaignId: body.campaignId,
+      placement: body.placement,
+      listenerUid: body.listenerUid,
+    });
+    this.store.record(
+      session.admin.email,
+      'ad_reconcile',
+      body.referenceId || result.journalId,
+      `gross=${body.reportedGrossMinor}`,
+    );
+    return result;
+  }
+
+  /**
+   * Controlled Studio→ledger migration. Defaults to non-cashoutable journals.
+   * Pass cashoutEligible=true only after finance sign-off that funds exist.
+   */
+  @Post('finance/migrate-studio-sales')
+  @UseGuards(AdminGuard)
+  migrateStudioSales(
+    @Body()
+    body: {
+      creatorUid?: string;
+      cashoutEligible?: boolean;
+    },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const uid = body.creatorUid?.trim();
+    if (!uid) throw new NotFoundException('creatorUid required');
+    const dashboard = this.studio.salesFor(uid);
+    const result = this.ledger.backfillStudioSales(dashboard.sales, {
+      cashoutEligible: body.cashoutEligible === true,
+    });
+    this.store.record(
+      session.admin.email,
+      'studio_sales_migration',
+      uid,
+      `posted=${result.posted};cashoutEligible=${result.cashoutEligible}`,
+    );
+    return result;
+  }
+
+  @Get('finance/fee-schedule')
+  @UseGuards(AdminGuard)
+  feeSchedule() {
+    return { processingFeeBpsByProvider: listProcessingFeeSchedule() };
   }
 
   @Get('users')
@@ -324,13 +410,24 @@ export class AdminController {
       creatorName: c.creatorName,
       amountMinor: c.amountMinor,
       currency: c.currency,
-      status: c.status === 'failed' ? 'rejected' : c.status,
+      status: c.status,
       requestedAt: c.requestedAt,
       reference: c.providerRef || `${c.rail}:${c.destination}`,
     }));
     const seededIds = new Set(seeded.map((p) => p.id));
     return {
       items: [...fromLedger.filter((p) => !seededIds.has(p.id)), ...seeded],
+      lifecycle: [
+        'requested',
+        'approved',
+        'processing',
+        'provider_confirmed',
+        'settled',
+        'failed',
+        'reversed',
+        'rejected',
+      ],
+      note: 'Ledger settle only after provider_confirmed with providerRef. Approve ≠ disbursement.',
     };
   }
 
@@ -340,7 +437,13 @@ export class AdminController {
     @Param('id') id: string,
     @Body()
     body: {
-      status: 'approved' | 'rejected' | 'settled';
+      status:
+        | 'approved'
+        | 'processing'
+        | 'provider_confirmed'
+        | 'settled'
+        | 'rejected'
+        | 'failed';
       reference?: string;
     },
     @Req() req: Record<string, unknown>,
@@ -353,7 +456,10 @@ export class AdminController {
         status: body.status,
         actorEmail: session.admin.email,
         providerRef: body.reference,
-        failureReason: body.status === 'rejected' ? body.reference : undefined,
+        failureReason:
+          body.status === 'rejected' || body.status === 'failed'
+            ? body.reference
+            : undefined,
       });
       this.store.record(session.admin.email, `payout_${body.status}`, id, body.reference);
       return {
@@ -361,13 +467,25 @@ export class AdminController {
         creatorName: updated.creatorName,
         amountMinor: updated.amountMinor,
         currency: updated.currency,
-        status: updated.status === 'failed' ? 'rejected' : updated.status,
+        status: updated.status as PayoutRequest['status'],
         requestedAt: updated.requestedAt,
         reference: updated.providerRef || `${updated.rail}:${updated.destination}`,
         journalId: updated.journalId,
         netMinor: updated.netMinor,
         feeMinor: updated.feeMinor,
+        providerConfirmed: updated.providerConfirmed,
+        processingAt: updated.processingAt,
+        providerConfirmedAt: updated.providerConfirmedAt,
+        settledAt: updated.settledAt,
       };
+    }
+    // Seeded prototype rows: keep legacy approve/reject/settle only.
+    if (
+      body.status !== 'approved' &&
+      body.status !== 'rejected' &&
+      body.status !== 'settled'
+    ) {
+      throw new NotFoundException('Payout request not found on ledger');
     }
     const updated = this.store.decidePayout(id, body.status, session.admin.email, body.reference);
     if (!updated) throw new NotFoundException('Payout request not found');
