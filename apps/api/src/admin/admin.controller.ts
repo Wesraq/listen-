@@ -50,7 +50,19 @@ export class AdminController {
   @Get('overview')
   @UseGuards(AdminGuard)
   overview() {
-    return this.store.overview();
+    const base = this.store.overview();
+    const adSettlements = this.ledger.listAdSettlements(500);
+    return {
+      ...base,
+      adSettlements: adSettlements.length,
+      advertisingRevenueMinor: adSettlements.reduce((s, a) => s + a.platformShareMinor, 0),
+    };
+  }
+
+  @Get('ads')
+  @UseGuards(AdminGuard)
+  ads() {
+    return { items: this.ledger.listAdSettlements(100) };
   }
 
   @Get('users')

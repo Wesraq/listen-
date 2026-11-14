@@ -16,6 +16,7 @@ import {
   AdminUserProfile,
   decideModeration,
   decidePayout,
+  getAdSettlements,
   getAudit,
   getModeration,
   getOverview,
@@ -65,6 +66,18 @@ export function App() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [moderation, setModeration] = useState<Array<Record<string, string>>>([]);
   const [payouts, setPayouts] = useState<Array<Record<string, string | number>>>([]);
+  const [adSettlements, setAdSettlements] = useState<
+    Array<{
+      id: string;
+      at: string;
+      currency: string;
+      titleId: string;
+      creatorUid: string;
+      grossMinor: number;
+      creatorShareMinor: number;
+      platformShareMinor: number;
+    }>
+  >([]);
   const [audit, setAudit] = useState<Array<Record<string, string>>>([]);
 
   const signedIn = Boolean(token && admin);
@@ -102,7 +115,10 @@ export function App() {
         }
       }
       if (tab === 'moderation') setModeration((await getModeration(token)).items);
-      if (tab === 'payouts') setPayouts((await getPayouts(token)).items);
+      if (tab === 'payouts') {
+        setPayouts((await getPayouts(token)).items);
+        setAdSettlements((await getAdSettlements(token)).items);
+      }
       if (tab === 'audit') setAudit((await getAudit(token)).items);
     } catch (err) {
       if (err instanceof AdminApiError && err.isUnauthorized) {
@@ -309,6 +325,16 @@ export function App() {
               <div className="metric-card">
                 <span>Users</span>
                 <strong>{overview.users}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Ad settlements</span>
+                <strong>{overview.adSettlements ?? 0}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Ad platform share</span>
+                <strong>
+                  {money(overview.advertisingRevenueMinor ?? 0, overview.market.currency)}
+                </strong>
               </div>
             </div>
           ) : null}
@@ -582,55 +608,104 @@ export function App() {
           ) : null}
 
           {tab === 'payouts' ? (
-            <div className="panel">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Creator</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {payouts.map((item) => (
-                    <TableRow key={String(item.id)}>
-                      <TableCell className="font-medium">{item.creatorName}</TableCell>
-                      <TableCell>{money(Number(item.amountMinor), String(item.currency))}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{String(item.status)}</Badge>
-                      </TableCell>
-                      <TableCell className="space-x-2 text-right">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => void decidePayout(token, String(item.id), 'approved').then(refresh)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            void decidePayout(token, String(item.id), 'settled', 'DEMO-SETTLE-001').then(
-                              refresh,
-                            )
-                          }
-                        >
-                          Settle
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => void decidePayout(token, String(item.id), 'rejected').then(refresh)}
-                        >
-                          Reject
-                        </Button>
-                      </TableCell>
+            <div className="space-y-6">
+              <div className="panel">
+                <h2 className="mb-3 text-sm font-medium">Cashouts</h2>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Creator</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {payouts.map((item) => (
+                      <TableRow key={String(item.id)}>
+                        <TableCell className="font-medium">{item.creatorName}</TableCell>
+                        <TableCell>
+                          {money(Number(item.amountMinor), String(item.currency))}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{String(item.status)}</Badge>
+                        </TableCell>
+                        <TableCell className="space-x-2 text-right">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              void decidePayout(token, String(item.id), 'approved').then(refresh)
+                            }
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void decidePayout(
+                                token,
+                                String(item.id),
+                                'settled',
+                                'DEMO-SETTLE-001',
+                              ).then(refresh)
+                            }
+                          >
+                            Settle
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() =>
+                              void decidePayout(token, String(item.id), 'rejected').then(refresh)
+                            }
+                          >
+                            Reject
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="panel">
+                <h2 className="mb-3 text-sm font-medium">Advertising settlements (ledger)</h2>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>When</TableHead>
+                      <TableHead>Title</TableHead>
+                      <TableHead>Creator</TableHead>
+                      <TableHead>Gross</TableHead>
+                      <TableHead>Creator 55%</TableHead>
+                      <TableHead>Platform 45%</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {adSettlements.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-muted-foreground">
+                          No ad settlements yet — completions post here after verified AdMob rewards.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      adSettlements.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell>{new Date(item.at).toLocaleString()}</TableCell>
+                          <TableCell className="font-mono text-xs">{item.titleId}</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {item.creatorUid.slice(0, 10)}
+                          </TableCell>
+                          <TableCell>{money(item.grossMinor, item.currency)}</TableCell>
+                          <TableCell>{money(item.creatorShareMinor, item.currency)}</TableCell>
+                          <TableCell>{money(item.platformShareMinor, item.currency)}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           ) : null}
 

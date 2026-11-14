@@ -327,6 +327,128 @@ export class LedgerService {
     };
   }
 
+  /**
+   * Settle a verified ad completion (AdMob reward / SSV).
+   * Default split: 55% creator payable, 45% advertising revenue.
+   */
+  settleAdvertising(input: {
+    referenceId: string;
+    customerUid: string;
+    creatorUid: string;
+    titleId: string;
+    currency: string;
+    grossMinor: number;
+    creatorShareBps?: number;
+    campaignId?: string;
+    placement?: string;
+  }): {
+    journal: LedgerJournal;
+    created: boolean;
+    creatorShareMinor: number;
+    platformShareMinor: number;
+  } {
+    const gross = Math.max(0, Math.floor(input.grossMinor));
+    const creatorBps = input.creatorShareBps ?? 5500;
+    const creatorShareMinor = Math.floor((gross * creatorBps) / 10_000);
+    const platformShareMinor = Math.max(0, gross - creatorShareMinor);
+
+    if (this.store.hasSettled('ad_completion', input.referenceId)) {
+      const existing = this.store
+        .listJournals()
+        .find(
+          (j) =>
+            j.referenceType === 'ad_completion' && j.referenceId === input.referenceId,
+        );
+      if (existing) {
+        return {
+          journal: existing,
+          created: false,
+          creatorShareMinor,
+          platformShareMinor,
+        };
+      }
+    }
+
+    if (gross <= 0) {
+      throw new BadRequestException('Ad gross must be positive');
+    }
+
+    const lines: LedgerLine[] = [
+      {
+        account: 'assets:processor_clearing',
+        debitMinor: gross,
+        creditMinor: 0,
+        memo: input.campaignId
+          ? `Ad network receipt · ${input.campaignId}`
+          : 'Ad network receipt',
+      },
+    ];
+    if (creatorShareMinor > 0) {
+      lines.push({
+        account: creatorPayableAccount(input.creatorUid),
+        debitMinor: 0,
+        creditMinor: creatorShareMinor,
+        memo: `Creator ad share · ${input.placement ?? 'ad'}`,
+      });
+    }
+    if (platformShareMinor > 0) {
+      lines.push({
+        account: 'revenue:advertising',
+        debitMinor: 0,
+        creditMinor: platformShareMinor,
+        memo: 'Platform ad share',
+      });
+    }
+
+    const journal = this.postJournal({
+      kind: 'ad_settlement',
+      currency: input.currency,
+      referenceType: 'ad_completion',
+      referenceId: input.referenceId,
+      lines,
+      memo: `Ad completion ${input.titleId}`,
+      customerUid: input.customerUid,
+      creatorUid: input.creatorUid,
+      titleId: input.titleId,
+    });
+
+    return {
+      journal,
+      created: true,
+      creatorShareMinor,
+      platformShareMinor,
+    };
+  }
+
+  /** Recent advertising settlements for ops / Studio cross-check. */
+  listAdSettlements(limit = 50) {
+    return this.store
+      .listJournals()
+      .filter((j) => j.kind === 'ad_settlement')
+      .slice(0, Math.max(1, Math.min(limit, 200)))
+      .map((j) => {
+        const grossMinor =
+          j.lines.find((l) => l.account === 'assets:processor_clearing')?.debitMinor ?? 0;
+        const platformShareMinor =
+          j.lines.find((l) => l.account === 'revenue:advertising')?.creditMinor ?? 0;
+        const creatorShareMinor =
+          j.lines.find((l) => String(l.account).startsWith('liability:creator_payable'))
+            ?.creditMinor ?? 0;
+        return {
+          id: j.id,
+          at: j.at,
+          currency: j.currency,
+          titleId: j.titleId ?? '',
+          creatorUid: j.creatorUid ?? '',
+          customerUid: j.customerUid ?? '',
+          referenceId: j.referenceId,
+          grossMinor,
+          creatorShareMinor,
+          platformShareMinor,
+        };
+      });
+  }
+
   balanceFor(account: LedgerAccountCode, currency: string): number {
     let debit = 0;
     let credit = 0;

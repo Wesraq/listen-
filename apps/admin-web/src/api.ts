@@ -67,7 +67,26 @@ export function getOverview(token: string) {
     paymentExceptions: number;
     users: number;
     market: { code: string; currency: string };
+    adSettlements?: number;
+    advertisingRevenueMinor?: number;
   }>('/v1/admin/overview', {}, token);
+}
+
+export function getAdSettlements(token: string) {
+  return request<{
+    items: Array<{
+      id: string;
+      at: string;
+      currency: string;
+      titleId: string;
+      creatorUid: string;
+      customerUid: string;
+      referenceId: string;
+      grossMinor: number;
+      creatorShareMinor: number;
+      platformShareMinor: number;
+    }>;
+  }>('/v1/admin/ads', {}, token);
 }
 
 export type AdminUserListItem = {

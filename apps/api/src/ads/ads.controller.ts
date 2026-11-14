@@ -9,6 +9,12 @@ import { AdsService } from './ads.service';
 export class AdsController {
   constructor(@Inject(AdsService) private readonly ads: AdsService) {}
 
+  /** Active campaigns (network inventory until advertiser self-serve). */
+  @Get('campaigns')
+  campaigns() {
+    return this.ads.listCampaigns();
+  }
+
   /** Record a client-reported AdMob reward (paired with SSV when configured). */
   @Post('complete')
   @UseGuards(AuthGuard)
@@ -22,6 +28,7 @@ export class AdsController {
       trackId?: string;
       source?: string;
       rewardEarned?: boolean;
+      campaignId?: string;
     },
   ) {
     return this.ads.complete({
@@ -32,6 +39,7 @@ export class AdsController {
       trackId: body.trackId,
       source: body.source ?? 'admob',
       rewardEarned: body.rewardEarned === true,
+      campaignId: body.campaignId,
     });
   }
 

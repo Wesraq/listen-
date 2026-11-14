@@ -1353,9 +1353,9 @@ class _EarningsPanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
           ),
           child: Text(
-            '• Purchases (ebook, audiobook, premium podcast) → ${policy.purchaseSplitLabel} of net receipts\n'
+            '• Purchases (ebook, audiobook, premium podcast) → ${policy.purchaseSplitLabel} of net receipts (ledger)\n'
             '• Subscription listening/reading → ${policy.subscriptionSplitLabel} of net sub revenue, shared by qualified consumption (ebook 30% / audio 45% / podcast 25% of the creator pool)\n'
-            '• Free with advertising → ${policy.advertisingSplitLabel} of net ad receipts (verified completed ads only)\n'
+            '• Free with advertising → ${policy.advertisingSplitLabel} of verified AdMob completions (client reward + optional SSV), settled on the shared ledger\n'
             '• Opens/views alone do not pay — only verified reading, listening minutes, completed purchases or monetised ads.',
             style: TextStyle(
               height: 1.45,
