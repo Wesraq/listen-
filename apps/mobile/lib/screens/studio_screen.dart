@@ -1287,7 +1287,7 @@ class _EarningsPanel extends StatelessWidget {
               Row(
                 children: [
                   Text(
-                    'Estimated earnings this month',
+                    'Creator share earned',
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
                   ),
                   const Spacer(),
@@ -1305,7 +1305,8 @@ class _EarningsPanel extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Available ${sales.money(sales.availableMinor)} · Pending ${sales.money(sales.pendingMinor)}'
+                'Cashout available ${sales.money(sales.availableMinor)}'
+                ' · On hold ${sales.money(sales.pendingMinor)} (${sales.holdDays}d)'
                 '${sales.paidOutMinor > 0 ? ' · Paid out ${sales.money(sales.paidOutMinor)}' : ''}',
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.78), fontSize: 12),
               ),

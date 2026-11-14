@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module';
 import { CatalogueModule } from '../catalogue/catalogue.module';
+import { FinanceModule } from '../finance/finance.module';
 import { StudioModule } from '../studio/studio.module';
 import { ConsumptionController } from './consumption.controller';
 import { ConsumptionService } from './consumption.service';
 
 @Module({
-  imports: [AuthModule, CatalogueModule, StudioModule],
+  imports: [AuthModule, CatalogueModule, StudioModule, FinanceModule],
   controllers: [ConsumptionController],
   providers: [ConsumptionService],
 })

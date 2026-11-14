@@ -535,6 +535,7 @@ class SalesDashboard {
     required this.pendingMinor,
     required this.sales,
     this.paidOutMinor = 0,
+    this.holdDays = 7,
     this.byFormat = const EarningsByFormat(),
     this.policy = const MonetisationPolicy(),
   });
@@ -544,6 +545,7 @@ class SalesDashboard {
   final int availableMinor;
   final int pendingMinor;
   final int paidOutMinor;
+  final int holdDays;
   final EarningsByFormat byFormat;
   final MonetisationPolicy policy;
   final List<SaleLine> sales;
@@ -578,6 +580,7 @@ class SalesDashboard {
       availableMinor: (json['availableMinor'] as num?)?.toInt() ?? 0,
       pendingMinor: (json['pendingMinor'] as num?)?.toInt() ?? 0,
       paidOutMinor: (json['paidOutMinor'] as num?)?.toInt() ?? 0,
+      holdDays: (json['holdDays'] as num?)?.toInt() ?? 7,
       byFormat: EarningsByFormat.fromJson(
         byFormatRaw is Map ? Map<String, dynamic>.from(byFormatRaw) : null,
       ),

@@ -59,6 +59,8 @@ export class LedgerService {
     titleId?: string;
     provider?: PaymentProvider;
     providerRef?: string;
+    /** Optional ISO timestamp — used when backfilling historical Studio sales. */
+    at?: string;
   }): LedgerJournal {
     if (this.store.hasSettled(input.referenceType, input.referenceId)) {
       const existing = this.store
@@ -96,11 +98,16 @@ export class LedgerService {
       );
     }
 
+    const at =
+      input.at && !Number.isNaN(Date.parse(input.at))
+        ? new Date(input.at).toISOString()
+        : new Date().toISOString();
+
     const journal: LedgerJournal = {
       id: `je_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
       kind: input.kind,
       currency: input.currency,
-      at: new Date().toISOString(),
+      at,
       referenceType: input.referenceType,
       referenceId: input.referenceId,
       memo: input.memo,
@@ -418,6 +425,125 @@ export class LedgerService {
       creatorShareMinor,
       platformShareMinor,
     };
+  }
+
+  /**
+   * Post a Studio sale line that never hit the shared ledger (legacy grants,
+   * subscription pool, pre-ledger ads). Skips rows already mirrored via payment/ad
+   * settlement (note contains "ledger") or already posted under studio_sale.
+   */
+  settleStudioSale(input: {
+    saleId: string;
+    creatorUid: string;
+    titleId?: string;
+    currency: string;
+    creatorShareMinor: number;
+    platformShareMinor: number;
+    stream: 'purchase' | 'subscription_pool' | 'advertising' | string;
+    at?: string;
+    note?: string;
+  }): { journal: LedgerJournal; created: boolean } | null {
+    const note = (input.note ?? '').toLowerCase();
+    // Already mirrored when payments/ads posted the real settlement journal.
+    if (/\bledger\b/.test(note)) {
+      return null;
+    }
+
+    const creatorShare = Math.max(0, Math.floor(input.creatorShareMinor));
+    const platformShare = Math.max(0, Math.floor(input.platformShareMinor));
+    const gross = creatorShare + platformShare;
+    if (gross <= 0 || !input.creatorUid) return null;
+
+    if (this.store.hasSettled('studio_sale', input.saleId)) {
+      const existing = this.store
+        .listJournals()
+        .find(
+          (j) => j.referenceType === 'studio_sale' && j.referenceId === input.saleId,
+        );
+      if (existing) return { journal: existing, created: false };
+    }
+
+    const revenueAccount: LedgerAccountCode =
+      input.stream === 'advertising'
+        ? 'revenue:advertising'
+        : input.stream === 'subscription_pool'
+          ? 'revenue:subscription'
+          : 'revenue:content_sales';
+
+    const lines: LedgerLine[] = [
+      {
+        // Balancing debit — historical Studio lines lacked a live processor receipt.
+        account: 'assets:processor_clearing',
+        debitMinor: gross,
+        creditMinor: 0,
+        memo: `Studio sale ${input.stream}`,
+      },
+    ];
+    if (creatorShare > 0) {
+      lines.push({
+        account: creatorPayableAccount(input.creatorUid),
+        debitMinor: 0,
+        creditMinor: creatorShare,
+        memo: 'Creator share (Studio backfill / pool)',
+      });
+    }
+    if (platformShare > 0) {
+      lines.push({
+        account: revenueAccount,
+        debitMinor: 0,
+        creditMinor: platformShare,
+        memo: 'Platform share',
+      });
+    }
+
+    const journal = this.postJournal({
+      kind: 'creator_earning',
+      currency: input.currency,
+      referenceType: 'studio_sale',
+      referenceId: input.saleId,
+      lines,
+      memo: input.note || `Studio sale ${input.saleId}`,
+      creatorUid: input.creatorUid,
+      titleId: input.titleId,
+      at: input.at,
+    });
+
+    return { journal, created: true };
+  }
+
+  /** Idempotently lift Studio-only earnings onto creator payables. */
+  backfillStudioSales(
+    sales: Array<{
+      id: string;
+      creatorUid: string;
+      titleId?: string;
+      currency: string;
+      creatorShareMinor: number;
+      platformShareMinor: number;
+      stream: string;
+      at?: string;
+      note?: string;
+    }>,
+  ): { posted: number; skipped: number } {
+    let posted = 0;
+    let skipped = 0;
+    for (const sale of sales) {
+      const result = this.settleStudioSale({
+        saleId: sale.id,
+        creatorUid: sale.creatorUid,
+        titleId: sale.titleId,
+        currency: sale.currency,
+        creatorShareMinor: sale.creatorShareMinor,
+        platformShareMinor: sale.platformShareMinor,
+        stream: sale.stream,
+        at: sale.at,
+        note: sale.note,
+      });
+      if (!result) skipped += 1;
+      else if (result.created) posted += 1;
+      else skipped += 1;
+    }
+    return { posted, skipped };
   }
 
   /** Recent advertising settlements for ops / Studio cross-check. */

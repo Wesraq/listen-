@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 
 import { CatalogueService } from '../catalogue/catalogue.service';
+import { LedgerService } from '../finance/ledger.service';
 import { StudioStore } from '../studio/studio.store';
 
 /** Prototype: ZMW credit per qualified listening/reading minute in the sub pool. */
@@ -14,6 +15,7 @@ export class ConsumptionService {
   constructor(
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
     @Inject(StudioStore) private readonly studio: StudioStore,
+    @Inject(LedgerService) private readonly ledger: LedgerService,
   ) {}
 
   /**
@@ -70,11 +72,24 @@ export class ConsumptionService {
       note: `Qualified ${input.kind} · ${grant} min (pool allocation)`,
     });
 
+    const settled = this.ledger.settleStudioSale({
+      saleId: sale.id,
+      creatorUid: title.creatorUid,
+      titleId: title.id,
+      currency: sale.currency,
+      creatorShareMinor: sale.creatorShareMinor,
+      platformShareMinor: sale.platformShareMinor,
+      stream: 'subscription_pool',
+      at: sale.at,
+      note: sale.note,
+    });
+
     return {
       ok: true,
       creditedMinutes: grant,
       creatorShareMinor: sale.creatorShareMinor,
       currency: sale.currency,
+      journalId: settled?.journal.id,
     };
   }
 }

@@ -183,8 +183,10 @@ export class StudioController {
   @Get('sales')
   sales(@CurrentUser() user: AuthUser) {
     const dashboard = this.studio.salesFor(user.uid, user.email);
+    // Lift legacy Studio-only lines (grants, pool, pre-ledger ads) onto payables.
+    this.ledger.backfillStudioSales(dashboard.sales);
     const bal = this.ledger.creatorBalance(user.uid, dashboard.currency);
-    // Prefer ledger balances when any settlement has posted; keep sale lines for history.
+    // Cashout truth always comes from the ledger once anything has posted.
     if (bal.earnedMinor > 0 || bal.paidOutMinor > 0 || bal.inFlightMinor > 0) {
       return {
         ...dashboard,
@@ -192,6 +194,7 @@ export class StudioController {
         availableMinor: bal.availableMinor,
         pendingMinor: bal.pendingHoldMinor + bal.inFlightMinor,
         paidOutMinor: bal.paidOutMinor,
+        holdDays: bal.holdDays,
         policy: {
           ...dashboard.policy,
           minPayoutMinor: bal.minPayoutMinor,
