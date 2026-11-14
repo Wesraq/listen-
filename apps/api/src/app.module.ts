@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogueModule } from './catalogue/catalogue.module';
 import { ConsumptionModule } from './consumption/consumption.module';
 import { DbModule } from './db/db.module';
+import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
 import { LibraryModule } from './library/library.module';
 import { MeModule } from './me/me.module';
@@ -28,6 +29,7 @@ import { StudioModule } from './studio/studio.module';
     AdsModule,
     ConsumptionModule,
     MediaModule,
+    FinanceModule,
     PaymentsModule,
   ],
 })

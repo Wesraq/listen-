@@ -107,7 +107,14 @@ class TitleFlowSheet extends StatefulWidget {
 
 class _TitleFlowSheetState extends State<TitleFlowSheet> {
   CheckoutState? checkout;
-  String payment = 'Mobile money';
+  String payment = 'mtn_momo';
+  final phoneController = TextEditingController();
+
+  @override
+  void dispose() {
+    phoneController.dispose();
+    super.dispose();
+  }
 
   TitleItem get title => widget.title;
 
@@ -280,11 +287,24 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                   initialValue: payment,
                   decoration: const InputDecoration(labelText: 'Payment method', border: OutlineInputBorder()),
                   items: const [
-                    DropdownMenuItem(value: 'Mobile money', child: Text('Mobile money')),
-                    DropdownMenuItem(value: 'Debit or credit card', child: Text('Debit or credit card')),
+                    DropdownMenuItem(value: 'mtn_momo', child: Text('MTN Mobile Money')),
+                    DropdownMenuItem(value: 'airtel_money', child: Text('Airtel Money')),
+                    DropdownMenuItem(value: 'card', child: Text('Debit or credit card')),
                   ],
                   onChanged: (value) => setState(() => payment = value ?? payment),
                 ),
+                if (payment == 'mtn_momo' || payment == 'airtel_money') ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Mobile money number',
+                      hintText: 'e.g. 097xxxxxxx',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -295,19 +315,40 @@ class _TitleFlowSheetState extends State<TitleFlowSheet> {
                 ),
                 const SizedBox(height: 16),
                 FilledButton(
-                  onPressed: () => setState(() => checkout = CheckoutState.pending),
+                  onPressed: () {
+                    if ((payment == 'mtn_momo' || payment == 'airtel_money') &&
+                        phoneController.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Enter the mobile money number to continue.')),
+                      );
+                      return;
+                    }
+                    setState(() => checkout = CheckoutState.pending);
+                  },
                   child: const Text('Continue to payment'),
                 ),
               ] else if (checkout == CheckoutState.pending) ...[
-                const ListTile(
+                ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.hourglass_top),
-                  title: Text('Confirming payment'),
-                  subtitle: Text('Almost there — your library updates when payment clears.'),
+                  leading: const Icon(Icons.hourglass_top),
+                  title: Text(
+                    payment == 'card' ? 'Confirming card payment' : 'Waiting for mobile money',
+                  ),
+                  subtitle: Text(
+                    payment == 'card'
+                        ? 'Sandbox: confirm to settle through the Listen+ ledger and unlock this title.'
+                        : 'Approve the prompt on ${phoneController.text.trim()}. Then confirm to finish.',
+                  ),
                 ),
                 FilledButton(
                   onPressed: () async {
-                    await session.grantOwnership(title.id);
+                    await session.grantOwnership(
+                      title.id,
+                      provider: payment,
+                      payerPhone: phoneController.text.trim().isEmpty
+                          ? null
+                          : phoneController.text.trim(),
+                    );
                     if (!mounted) return;
                     setState(() => checkout = CheckoutState.success);
                   },

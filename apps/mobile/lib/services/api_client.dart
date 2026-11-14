@@ -115,6 +115,32 @@ class ListenApiClient {
     }
   }
 
+  Future<List<CollectionInfo>?> fetchCollections() async {
+    try {
+      final response =
+          await _client.get(_uri('/catalogue/collections')).timeout(const Duration(seconds: 5));
+      if (response.statusCode != 200) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) return null;
+      final items = decoded['items'];
+      if (items is! List) return null;
+      return items.whereType<Map>().map((item) {
+        final ids = item['titleIds'];
+        return CollectionInfo(
+          id: '${item['id'] ?? ''}',
+          name: '${item['name'] ?? ''}',
+          description: '${item['description'] ?? ''}',
+          imageAsset: '${item['imageAsset'] ?? 'assets/images/quiet.jpg'}',
+          titleIds: ids is List
+              ? ids.map((id) => '$id').where((id) => id.isNotEmpty).toList()
+              : const <String>[],
+        );
+      }).where((c) => c.id.isNotEmpty).toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Download media bytes to [destinationPath] (ebook PDFs, etc).
   Future<String?> downloadMediaFile(
     String mediaUrl, {
@@ -155,8 +181,14 @@ class ListenApiClient {
     }
   }
 
-  /// Simulated checkout: create intent then confirm (server grants entitlement).
-  Future<bool> purchaseTitle(String bearerToken, String titleId) async {
+  /// Checkout via Listen+ financial engine (create intent → confirm in sandbox).
+  /// [provider]: simulate | mtn_momo | airtel_money | card
+  Future<bool> purchaseTitle(
+    String bearerToken,
+    String titleId, {
+    String provider = 'simulate',
+    String? payerPhone,
+  }) async {
     try {
       final create = await _client
           .post(
@@ -165,7 +197,53 @@ class ListenApiClient {
               'Authorization': 'Bearer $bearerToken',
               'Content-Type': 'application/json',
             },
-            body: jsonEncode({'titleId': titleId}),
+            body: jsonEncode({
+              'kind': 'title_purchase',
+              'titleId': titleId,
+              'provider': provider,
+              if (payerPhone != null && payerPhone.trim().isNotEmpty)
+                'payerPhone': payerPhone.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (create.statusCode < 200 || create.statusCode >= 300) return false;
+      final decoded = jsonDecode(create.body);
+      if (decoded is! Map) return false;
+      final intentId = decoded['id'];
+      if (intentId == null) return false;
+      final confirm = await _client
+          .post(
+            _uri('/payments/intents/$intentId/confirm'),
+            headers: {'Authorization': 'Bearer $bearerToken'},
+          )
+          .timeout(const Duration(seconds: 8));
+      return confirm.statusCode >= 200 && confirm.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> purchaseSubscription(
+    String bearerToken, {
+    required String planId,
+    String provider = 'simulate',
+    String? payerPhone,
+  }) async {
+    try {
+      final create = await _client
+          .post(
+            _uri('/payments/intents'),
+            headers: {
+              'Authorization': 'Bearer $bearerToken',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'kind': 'subscription',
+              'planId': planId,
+              'provider': provider,
+              if (payerPhone != null && payerPhone.trim().isNotEmpty)
+                'payerPhone': payerPhone.trim(),
+            }),
           )
           .timeout(const Duration(seconds: 8));
       if (create.statusCode < 200 || create.statusCode >= 300) return false;

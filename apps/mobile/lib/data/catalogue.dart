@@ -307,7 +307,7 @@ const categories = <CategoryInfo>[
   CategoryInfo(name: 'Independent voices', description: 'Creator Studio titles and indie releases.'),
 ];
 
-const collections = <CollectionInfo>[
+const _seedCollections = <CollectionInfo>[
   CollectionInfo(
     id: 'editors',
     name: 'From creators',
@@ -317,8 +317,22 @@ const collections = <CollectionInfo>[
   ),
 ];
 
-List<TitleItem> titlesInCategory(String category) =>
-    titles.where((title) => title.category == category).toList();
+/// Active curated collections — replaced when `/catalogue/collections` syncs.
+List<CollectionInfo> collections = List<CollectionInfo>.from(_seedCollections);
+
+List<TitleItem> titlesInCategory(String category) {
+  if (category == 'Independent voices') {
+    return titles
+        .where(
+          (title) =>
+              title.category == category ||
+              (title.creatorUid != null && title.creatorUid!.isNotEmpty) ||
+              title.id.startsWith('creator-'),
+        )
+        .toList();
+  }
+  return titles.where((title) => title.category == category).toList();
+}
 
 TitleItem? titleById(String id) {
   for (final title in titles) {
@@ -402,12 +416,75 @@ bool catalogueFromApi = false;
 void replaceCatalogue(List<TitleItem> next, {required bool fromApi}) {
   titles = List<TitleItem>.from(next);
   catalogueFromApi = fromApi;
+  ensureCreatorsCollection();
+}
+
+void replaceCollections(List<CollectionInfo> next) {
+  if (next.isEmpty) {
+    ensureCreatorsCollection();
+    return;
+  }
+  collections = next
+      .map(
+        (c) => CollectionInfo(
+          id: c.id,
+          name: c.name,
+          description: c.description,
+          imageAsset: c.imageAsset.isEmpty ? 'assets/images/quiet.jpg' : c.imageAsset,
+          titleIds: List<String>.from(c.titleIds),
+        ),
+      )
+      .toList();
+  ensureCreatorsCollection();
+}
+
+/// Keep “From creators” filled even if collection sync lags behind titles.
+void ensureCreatorsCollection() {
+  final creatorIds = titles
+      .where(
+        (t) =>
+            (t.creatorUid != null && t.creatorUid!.isNotEmpty) ||
+            t.id.startsWith('creator-'),
+      )
+      .map((t) => t.id)
+      .toList();
+  if (creatorIds.isEmpty) return;
+
+  final index = collections.indexWhere((c) => c.id == 'editors');
+  if (index < 0) {
+    collections = [
+      CollectionInfo(
+        id: 'editors',
+        name: 'From creators',
+        description: 'Approved titles from Listen+ Creator Studio.',
+        imageAsset: 'assets/images/quiet.jpg',
+        titleIds: creatorIds,
+      ),
+      ...collections,
+    ];
+    return;
+  }
+
+  final current = collections[index];
+  final merged = <String>[...current.titleIds];
+  for (final id in creatorIds) {
+    if (!merged.contains(id)) merged.add(id);
+  }
+  if (merged.length == current.titleIds.length) return;
+  collections[index] = CollectionInfo(
+    id: current.id,
+    name: current.name,
+    description: current.description,
+    imageAsset: current.imageAsset,
+    titleIds: merged,
+  );
 }
 
 /// Keep existing catalogue rows and add any missing ids (e.g. live Studio titles).
 void mergeCatalogue(List<TitleItem> extras, {bool? fromApi}) {
   if (extras.isEmpty) {
     if (fromApi != null) catalogueFromApi = fromApi;
+    ensureCreatorsCollection();
     return;
   }
   final byId = <String, TitleItem>{for (final title in titles) title.id: title};
@@ -422,4 +499,5 @@ void mergeCatalogue(List<TitleItem> extras, {bool? fromApi}) {
     titles = byId.values.toList();
   }
   if (fromApi != null) catalogueFromApi = fromApi;
+  ensureCreatorsCollection();
 }

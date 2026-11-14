@@ -5,9 +5,11 @@ import { dirname, join } from 'path';
 
 import { DbService } from '../db/db.service';
 import { FirestoreService } from '../db/firestore.service';
+import type { PaymentKind, PaymentProvider } from '../finance/finance.types';
 
 export type PaymentIntentStatus =
   | 'requires_confirmation'
+  | 'requires_action'
   | 'processing'
   | 'succeeded'
   | 'failed'
@@ -16,15 +18,23 @@ export type PaymentIntentStatus =
 export interface PaymentIntent {
   id: string;
   uid: string;
-  titleId: string;
+  kind: PaymentKind;
+  /** Set for title_purchase. */
+  titleId?: string;
+  /** Set for subscription. */
+  planId?: string;
   amountMinor: number;
   currency: string;
   status: PaymentIntentStatus;
-  provider: string;
+  provider: PaymentProvider;
+  /** MSISDN for MoMo / Airtel (E.164 or local). */
+  payerPhone?: string;
   createdAt: string;
   updatedAt: string;
   providerRef?: string;
   failureReason?: string;
+  /** Human hint shown while waiting on the wallet / 3DS. */
+  actionHint?: string;
 }
 
 @Injectable()
@@ -62,19 +72,29 @@ export class PaymentsStore implements OnModuleInit {
 
   create(input: {
     uid: string;
-    titleId: string;
+    kind: PaymentKind;
+    titleId?: string;
+    planId?: string;
     amountMinor: number;
     currency: string;
+    provider: PaymentProvider;
+    payerPhone?: string;
+    status?: PaymentIntentStatus;
+    actionHint?: string;
   }): PaymentIntent {
     const now = new Date().toISOString();
     const intent: PaymentIntent = {
       id: `pi_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       uid: input.uid,
+      kind: input.kind,
       titleId: input.titleId,
+      planId: input.planId,
       amountMinor: input.amountMinor,
       currency: input.currency || 'ZMW',
-      status: 'requires_confirmation',
-      provider: 'simulate',
+      status: input.status ?? 'requires_confirmation',
+      provider: input.provider,
+      payerPhone: input.payerPhone,
+      actionHint: input.actionHint,
       createdAt: now,
       updatedAt: now,
     };
@@ -90,7 +110,7 @@ export class PaymentsStore implements OnModuleInit {
   mark(
     id: string,
     status: PaymentIntentStatus,
-    extras?: { providerRef?: string; failureReason?: string },
+    extras?: { providerRef?: string; failureReason?: string; actionHint?: string },
   ): PaymentIntent | null {
     const intent = this.intents.get(id);
     if (!intent) return null;
@@ -98,6 +118,7 @@ export class PaymentsStore implements OnModuleInit {
     intent.updatedAt = new Date().toISOString();
     if (extras?.providerRef) intent.providerRef = extras.providerRef;
     if (extras?.failureReason) intent.failureReason = extras.failureReason;
+    if (extras?.actionHint !== undefined) intent.actionHint = extras.actionHint;
     void this.persistOne(intent);
     return intent;
   }
@@ -118,7 +139,13 @@ export class PaymentsStore implements OnModuleInit {
         intents?: PaymentIntent[];
         events?: string[];
       };
-      for (const intent of raw.intents ?? []) this.intents.set(intent.id, intent);
+      for (const intent of raw.intents ?? []) {
+        this.intents.set(intent.id, {
+          ...intent,
+          kind: intent.kind ?? 'title_purchase',
+          provider: intent.provider ?? 'simulate',
+        });
+      }
       for (const eventId of raw.events ?? []) this.processedEvents.add(eventId);
       this.logger.log(`Loaded ${this.intents.size} payment intent(s) from disk`);
     } catch (error) {
@@ -151,7 +178,13 @@ export class PaymentsStore implements OnModuleInit {
       const intents = await this.fs.list<{ payload: PaymentIntent }>('payment_intents');
       for (const row of intents) {
         const intent = row.payload;
-        if (intent?.id) this.intents.set(intent.id, intent);
+        if (intent?.id) {
+          this.intents.set(intent.id, {
+            ...intent,
+            kind: intent.kind ?? 'title_purchase',
+            provider: intent.provider ?? 'simulate',
+          });
+        }
       }
       const events = await this.fs.list<{ eventId?: string }>('payment_webhook_events');
       for (const row of events) this.processedEvents.add(row.eventId ?? row.id);
@@ -168,7 +201,13 @@ export class PaymentsStore implements OnModuleInit {
       );
       for (const row of intents.rows) {
         const intent = row.payload;
-        if (intent?.id) this.intents.set(intent.id, intent);
+        if (intent?.id) {
+          this.intents.set(intent.id, {
+            ...intent,
+            kind: intent.kind ?? 'title_purchase',
+            provider: intent.provider ?? 'simulate',
+          });
+        }
       }
       const events = await this.db.query<{ event_id: string }>(
         'SELECT event_id FROM payment_webhook_events',
@@ -210,7 +249,13 @@ export class PaymentsStore implements OnModuleInit {
              status = EXCLUDED.status,
              payload = EXCLUDED.payload,
              updated_at = NOW()`,
-          [intent.id, intent.uid, intent.titleId, intent.status, JSON.stringify(intent)],
+          [
+            intent.id,
+            intent.uid,
+            intent.titleId ?? intent.planId ?? '',
+            intent.status,
+            JSON.stringify(intent),
+          ],
         );
         return;
       } catch (error) {

@@ -322,6 +322,12 @@ class SessionState extends ChangeNotifier {
       // Warm a few visible/continue titles in the background — never block Home.
       unawaited(_warmCatalogueParts(remote));
     }
+    final remoteCollections = await _api.fetchCollections();
+    if (remoteCollections != null) {
+      replaceCollections(remoteCollections);
+    } else {
+      ensureCreatorsCollection();
+    }
     // Fill gaps when API catalogue lags behind live Studio drafts.
     _mergeLiveDraftsIntoCatalogue();
   }
@@ -914,7 +920,11 @@ class SessionState extends ChangeNotifier {
     }
   }
 
-  Future<void> grantOwnership(String id) async {
+  Future<void> grantOwnership(
+    String id, {
+    String provider = 'simulate',
+    String? payerPhone,
+  }) async {
     owned.add(id);
     notifyListeners();
     await _persist();
@@ -925,9 +935,14 @@ class SessionState extends ChangeNotifier {
       showNotice('Added to your library. Sign in to sync across devices.');
       return;
     }
-    // Prefer payment intent + confirm so entitlements are server-verified.
-    final ok =
-        await _api.purchaseTitle(bearer, id) || await _api.grantOwnership(bearer, id);
+    // Prefer payment intent + ledger settlement so entitlements are server-verified.
+    final ok = await _api.purchaseTitle(
+          bearer,
+          id,
+          provider: provider,
+          payerPhone: payerPhone,
+        ) ||
+        await _api.grantOwnership(bearer, id);
     if (ok) {
       librarySyncedFromApi = true;
       _pendingOwnedSync.remove(id);

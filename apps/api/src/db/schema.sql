@@ -115,3 +115,29 @@ CREATE TABLE IF NOT EXISTS payment_webhook_events (
   event_id TEXT PRIMARY KEY,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS finance_journals (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  reference_type TEXT NOT NULL,
+  reference_id TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS finance_journals_ref_idx
+  ON finance_journals (reference_type, reference_id);
+
+CREATE INDEX IF NOT EXISTS finance_journals_created_idx ON finance_journals (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS finance_subscriptions (
+  id TEXT PRIMARY KEY,
+  uid TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS finance_subscriptions_uid_idx ON finance_subscriptions (uid);

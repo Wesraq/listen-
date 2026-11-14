@@ -2,6 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 
 import { CatalogueService } from '../catalogue/catalogue.service';
 import type { ContentFormat } from '../catalogue/catalogue.types';
+import { LedgerService } from '../finance/ledger.service';
 import { StudioStore } from '../studio/studio.store';
 import { LibraryStore } from './library.store';
 
@@ -11,6 +12,7 @@ export class LibraryService {
     @Inject(LibraryStore) private readonly store: LibraryStore,
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
     @Inject(StudioStore) private readonly studio: StudioStore,
+    @Inject(LedgerService) private readonly ledger: LedgerService,
   ) {}
 
   getLibrary(uid: string) {
@@ -28,11 +30,21 @@ export class LibraryService {
     const title = this.catalogue.getTitle(titleId);
     const isFree =
       title.priceMinor === 0 || title.monetisationMode === 'free_with_ads';
-    const entitled = this.store.isEntitled(uid, titleId, isFree);
+    if (this.store.isEntitled(uid, titleId, isFree)) {
+      return {
+        titleId,
+        entitled: true,
+        reason: isFree ? 'free' : 'owned',
+      };
+    }
+    const sub = this.ledger.getActiveSubscription(uid);
+    const subOk =
+      Boolean(sub) &&
+      (title.monetisationMode === 'subscription' || title.subscriptionEligible === true);
     return {
       titleId,
-      entitled,
-      reason: entitled ? (isFree ? 'free' : 'owned') : 'not_owned',
+      entitled: subOk,
+      reason: subOk ? 'subscription' : 'not_owned',
     };
   }
 
@@ -40,16 +52,17 @@ export class LibraryService {
    * Prototype purchase grant. Real entitlements must come from verified payment
    * webhooks. First paid grant credits the creator ledger (70/30 of net receipts).
    */
-  grant(uid: string, titleId: string) {
+  grant(uid: string, titleId: string, options?: { skipEarning?: boolean }) {
     const title = this.catalogue.getTitle(titleId);
     const alreadyOwned = this.store.isEntitled(uid, titleId, false);
     const ownedIds = this.store.grantOwnership(uid, titleId);
 
-    if (!alreadyOwned && title.priceMinor > 0) {
+    // Preferred path: PaymentsService settles the shared ledger first, then grants
+    // with skipEarning. Legacy client grants still record a Studio earnings line.
+    if (!options?.skipEarning && !alreadyOwned && title.priceMinor > 0) {
       const draft = this.studio.findByPublishedTitleId(titleId);
       const creatorUid = draft?.creatorUid ?? title.creatorUid;
       if (creatorUid) {
-        // Illustrative payment-processing deduction before the 70/30 split.
         const deductionsMinor = Math.floor(title.priceMinor * 0.03);
         this.studio.recordEarning({
           creatorUid,
@@ -61,7 +74,7 @@ export class LibraryService {
           market: 'ZM',
           stream: 'purchase',
           format: this.earningFormat(title.format),
-          note: 'Simulated purchase · net receipts after illustrative 3% processing fee',
+          note: 'Legacy grant · prefer /payments intents for ledger settlement',
         });
       }
     }
