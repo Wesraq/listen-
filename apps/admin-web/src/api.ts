@@ -69,7 +69,71 @@ export function getOverview(token: string) {
     market: { code: string; currency: string };
     adSettlements?: number;
     advertisingRevenueMinor?: number;
+    reconciliationOpenExceptions?: number;
+    reconciliationGoLiveGate?: boolean;
+    reconciliationLatestRunStatus?: string | null;
   }>('/v1/admin/overview', {}, token);
+}
+
+export function getReconciliationOverview(token: string) {
+  return request<{
+    currency: string;
+    openExceptionCount: number;
+    draftBatchCount: number;
+    matchingBatchCount: number;
+    balancedBatchCount: number;
+    closedBatchCount: number;
+    goLiveGate: boolean;
+    latestRun: {
+      id: string;
+      status: string;
+      periodStart: string;
+      periodEnd: string;
+      summary: string;
+      customerPayments: Record<string, number>;
+      processingFees: Record<string, number>;
+      bank: Record<string, number>;
+      creatorLiabilities: Record<string, number>;
+      creatorPayouts: Record<string, number>;
+    } | null;
+    controls: string[];
+  }>('/v1/admin/reconciliation/overview', {}, token);
+}
+
+export function getReconciliationExceptions(token: string) {
+  return request<{
+    items: Array<{
+      id: string;
+      kind: string;
+      status: string;
+      currency: string;
+      amountMinor: number;
+      message: string;
+      createdAt: string;
+    }>;
+  }>('/v1/admin/reconciliation/exceptions', {}, token);
+}
+
+export function runReconciliation(
+  token: string,
+  body: { periodStart: string; periodEnd: string; currency?: string },
+) {
+  return request('/v1/admin/reconciliation/runs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }, token);
+}
+
+export function resolveReconciliationException(
+  token: string,
+  id: string,
+  status: 'resolved' | 'waived' | 'investigating',
+  note?: string,
+) {
+  return request(`/v1/admin/reconciliation/exceptions/${encodeURIComponent(id)}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ status, note }),
+  }, token);
 }
 
 export function getAdSettlements(token: string) {

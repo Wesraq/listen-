@@ -32,6 +32,7 @@ Prototype double-entry ledger shared by purchases, subscriptions, advertising, a
 | `ConsumptionService` | Qualified minutes → Studio estimate (+ non-cashoutable journal optional) |
 | `StudioStore.sales` | Creator-facing statement / by-format (may include simulated lines) |
 | Admin Finance | Cashout lifecycle + ad settlements + fee schedule + migrations |
+| `ReconciliationService` | Settlement batches, auto-match, period runs, exception queue, go-live gate |
 
 Persistence: Firestore when `DATA_BACKEND=firestore`.
 
@@ -158,24 +159,99 @@ Default non-cashoutable; set `cashoutEligible: true` only after finance sign-off
 | `POST /admin/ads/reconcile` | Cashoutable ad attribution from reported gross |
 | `POST /admin/finance/migrate-studio-sales` | Controlled Studio→ledger migration |
 | `GET /admin/finance/fee-schedule` | Provider fee bps |
+| `GET /admin/reconciliation/overview` | Go-live gate + batch/run snapshot |
+| `POST /admin/reconciliation/batches` | Import provider/bank settlement statement |
+| `POST /admin/reconciliation/batches/:id/match` | Auto-match lines to ledger/cashouts |
+| `POST /admin/reconciliation/batches/:id/close` | Close batch after exceptions cleared |
+| `POST /admin/reconciliation/runs` | Period roll-up across all six controls |
+| `GET /admin/reconciliation/exceptions` | Open variance / unmatched queue |
 
 ---
 
-## 8. Not live yet
+## 8. Settlement reconciliation (pre-live control)
+
+Complete process that ties external evidence to ledger truth before production cashouts.
+
+### Control points
+
+| # | Control | Ledger side | External side |
+| --- | --- | --- | --- |
+| 1 | Customer payment confirmations | `payment_settlement` / `subscription_settlement` journals | Settlement lines `customer_payment` |
+| 2 | Provider settlement reports | Matched by `providerRef` / `internalRef` (intent id) | Imported `SettlementBatch` |
+| 3 | Actual bank credits | Expected net ≈ payments − fees | Settlement lines `bank_credit` |
+| 4 | Processing fees | `expense:processing_fees` on payment journals | Settlement lines `processing_fee` |
+| 5 | Creator liabilities | Payable roll-forward (opening + credits − payouts) | Computed closing vs roll-forward |
+| 6 | Creator payouts | Cashouts `settled` (net) | Settlement lines `creator_payout` |
+
+### Workflow
+
+1. **Import** provider/bank statement → `POST /v1/admin/reconciliation/batches`  
+   Line kinds: `customer_payment` · `processing_fee` · `bank_credit` · `creator_payout` · `refund` · `adjustment`
+2. **Match** → `POST /v1/admin/reconciliation/batches/:id/match`  
+   Auto-links lines to journals/cashouts; opens exceptions for unmatched / amount / fee variances
+3. **Period run** → `POST /v1/admin/reconciliation/runs`  
+   Rolls up all six controls for `[periodStart, periodEnd]`; status `balanced` or `exceptions`
+4. **Exception queue** → `GET /v1/admin/reconciliation/exceptions`  
+   Resolve / waive / investigate via `POST …/exceptions/:id/resolve`
+5. **Close batch** → `POST …/batches/:id/close` (blocked while open exceptions unless `force`)
+6. **Go-live gate** → `GET /v1/admin/reconciliation/overview`  
+   `goLiveGate: true` only when open exceptions = 0, latest run is `balanced`, and at least one batch is balanced/closed
+
+Admin Finance tab surfaces the gate, latest run summary, exception actions, and “Run 7-day reconciliation”.
+
+### Example import body
+
+```json
+{
+  "provider": "mtn_momo",
+  "currency": "ZMW",
+  "periodStart": "2026-11-01T00:00:00.000Z",
+  "periodEnd": "2026-11-14T23:59:59.000Z",
+  "source": "mtn_settlement_csv",
+  "lines": [
+    {
+      "kind": "customer_payment",
+      "amountMinor": 10000,
+      "providerRef": "MOMO-TX-001",
+      "internalRef": "pi_abc",
+      "occurredAt": "2026-11-10T12:00:00.000Z"
+    },
+    {
+      "kind": "processing_fee",
+      "amountMinor": 250,
+      "providerRef": "MOMO-TX-001-FEE",
+      "internalRef": "pi_abc",
+      "occurredAt": "2026-11-10T12:00:00.000Z"
+    },
+    {
+      "kind": "bank_credit",
+      "amountMinor": 9750,
+      "providerRef": "BANK-DEP-77",
+      "occurredAt": "2026-11-11T09:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## 9. Not live yet
 
 - Real MTN MoMo / Airtel / card disbursement APIs (processing status is adapter-ready, not live send)
+- Automated ingest of provider settlement files (API import exists; SFTP/CSV connectors deferred)
 - AdMob production app/unit IDs
-- Automated pull of AdMob mediation reports into reconcile
+- Automated pull of AdMob mediation reports into ad reconcile
 - Cashout `reversed` automated journals
 - Postgres as system of record
 
 ---
 
-## 9. Verify quickly
+## 10. Verify quickly
 
 1. `POST /library/owned/:id` with Bearer → **403** (client grants off)  
 2. `POST /ads/complete` with `rewardEarned: true` → `credited: false`, no cashout bump  
 3. SSV without valid signature → **401**  
 4. SSV simulate → Studio advertising may rise; **cashout available** unchanged  
 5. Admin reconcile with reported gross → cashoutable earned increases (after hold)  
-6. Cashout: cannot `settled` until `provider_confirmed` + `providerRef`
+6. Cashout: cannot `settled` until `provider_confirmed` + `providerRef`  
+7. Import settlement batch → match → run period → exceptions or `goLiveGate`

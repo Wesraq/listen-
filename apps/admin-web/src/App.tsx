@@ -21,9 +21,13 @@ import {
   getModeration,
   getOverview,
   getPayouts,
+  getReconciliationExceptions,
+  getReconciliationOverview,
   getUserProfile,
   getUsers,
   login,
+  resolveReconciliationException,
+  runReconciliation,
   setCreatorStatus,
 } from './api';
 import { Badge } from '@/components/ui/badge';
@@ -78,6 +82,20 @@ export function App() {
       platformShareMinor: number;
     }>
   >([]);
+  const [reconOverview, setReconOverview] = useState<Awaited<
+    ReturnType<typeof getReconciliationOverview>
+  > | null>(null);
+  const [reconExceptions, setReconExceptions] = useState<
+    Array<{
+      id: string;
+      kind: string;
+      status: string;
+      currency: string;
+      amountMinor: number;
+      message: string;
+      createdAt: string;
+    }>
+  >([]);
   const [audit, setAudit] = useState<Array<Record<string, string>>>([]);
 
   const signedIn = Boolean(token && admin);
@@ -118,6 +136,8 @@ export function App() {
       if (tab === 'payouts') {
         setPayouts((await getPayouts(token)).items);
         setAdSettlements((await getAdSettlements(token)).items);
+        setReconOverview(await getReconciliationOverview(token));
+        setReconExceptions((await getReconciliationExceptions(token)).items);
       }
       if (tab === 'audit') setAudit((await getAudit(token)).items);
     } catch (err) {
@@ -335,6 +355,14 @@ export function App() {
                 <strong>
                   {money(overview.advertisingRevenueMinor ?? 0, overview.market.currency)}
                 </strong>
+              </div>
+              <div className="metric-card">
+                <span>Recon exceptions</span>
+                <strong>{overview.reconciliationOpenExceptions ?? 0}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Go-live recon gate</span>
+                <strong>{overview.reconciliationGoLiveGate ? 'Pass' : 'Blocked'}</strong>
               </div>
             </div>
           ) : null}
@@ -609,6 +637,137 @@ export function App() {
 
           {tab === 'payouts' ? (
             <div className="space-y-6">
+              <div className="panel">
+                <h2 className="mb-3 text-sm font-medium">Settlement reconciliation</h2>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Controls: customer payment confirms · provider settlement reports · bank credits ·
+                  processing fees · creator liabilities · creator payouts. Production cashouts stay
+                  blocked until the go-live gate passes.
+                </p>
+                {reconOverview ? (
+                  <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="metric-card">
+                      <span>Go-live gate</span>
+                      <strong>{reconOverview.goLiveGate ? 'Pass' : 'Blocked'}</strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>Open exceptions</span>
+                      <strong>{reconOverview.openExceptionCount}</strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>Batches (balanced/closed)</span>
+                      <strong>
+                        {reconOverview.balancedBatchCount}/{reconOverview.closedBatchCount}
+                      </strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>Latest run</span>
+                      <strong>{reconOverview.latestRun?.status ?? 'none'}</strong>
+                    </div>
+                  </div>
+                ) : null}
+                {reconOverview?.latestRun ? (
+                  <p className="mb-3 text-xs text-muted-foreground">{reconOverview.latestRun.summary}</p>
+                ) : null}
+                <div className="mb-4">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      const end = new Date();
+                      const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+                      void runReconciliation(token, {
+                        periodStart: start.toISOString(),
+                        periodEnd: end.toISOString(),
+                        currency: 'ZMW',
+                      }).then(refresh);
+                    }}
+                  >
+                    Run 7-day reconciliation
+                  </Button>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>When</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Message</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reconExceptions.filter((e) => e.status === 'open').length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-muted-foreground">
+                          No open reconciliation exceptions.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      reconExceptions
+                        .filter((e) => e.status === 'open')
+                        .slice(0, 20)
+                        .map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell>{new Date(item.createdAt).toLocaleString()}</TableCell>
+                            <TableCell className="font-mono text-xs">{item.kind}</TableCell>
+                            <TableCell>{money(item.amountMinor, item.currency)}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{item.status}</Badge>
+                            </TableCell>
+                            <TableCell className="max-w-xs text-xs text-muted-foreground">
+                              {item.message}
+                            </TableCell>
+                            <TableCell className="space-x-2 text-right">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  void resolveReconciliationException(
+                                    token,
+                                    item.id,
+                                    'investigating',
+                                  ).then(refresh)
+                                }
+                              >
+                                Investigate
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() =>
+                                  void resolveReconciliationException(
+                                    token,
+                                    item.id,
+                                    'resolved',
+                                    'Cleared in admin',
+                                  ).then(refresh)
+                                }
+                              >
+                                Resolve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() =>
+                                  void resolveReconciliationException(
+                                    token,
+                                    item.id,
+                                    'waived',
+                                    'Waived by finance',
+                                  ).then(refresh)
+                                }
+                              >
+                                Waive
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
               <div className="panel">
                 <h2 className="mb-3 text-sm font-medium">Cashouts</h2>
                 <p className="mb-3 text-xs text-muted-foreground">

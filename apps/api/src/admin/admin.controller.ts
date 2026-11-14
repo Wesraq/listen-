@@ -14,6 +14,8 @@ import {
 import { AdsService } from '../ads/ads.service';
 import { CatalogueService } from '../catalogue/catalogue.service';
 import { LedgerService } from '../finance/ledger.service';
+import { ReconciliationService } from '../finance/reconciliation.service';
+import type { SettlementLineKind } from '../finance/reconciliation.types';
 import { LibraryStore } from '../library/library.store';
 import { listProcessingFeeSchedule } from '../payments/processing-fees';
 import { StudioStore } from '../studio/studio.store';
@@ -30,6 +32,7 @@ export class AdminController {
     @Inject(LibraryStore) private readonly library: LibraryStore,
     @Inject(LedgerService) private readonly ledger: LedgerService,
     @Inject(AdsService) private readonly adsService: AdsService,
+    @Inject(ReconciliationService) private readonly reconciliation: ReconciliationService,
   ) {}
 
   @Post('auth/login')
@@ -55,10 +58,14 @@ export class AdminController {
   overview() {
     const base = this.store.overview();
     const adSettlements = this.ledger.listAdSettlements(500);
+    const recon = this.reconciliation.overview('ZMW');
     return {
       ...base,
       adSettlements: adSettlements.length,
       advertisingRevenueMinor: adSettlements.reduce((s, a) => s + a.platformShareMinor, 0),
+      reconciliationOpenExceptions: recon.openExceptionCount,
+      reconciliationGoLiveGate: recon.goLiveGate,
+      reconciliationLatestRunStatus: recon.latestRun?.status ?? null,
     };
   }
 
@@ -149,6 +156,145 @@ export class AdminController {
   @UseGuards(AdminGuard)
   feeSchedule() {
     return { processingFeeBpsByProvider: listProcessingFeeSchedule() };
+  }
+
+  /** Settlement reconciliation control tower (pre-live gate). */
+  @Get('reconciliation/overview')
+  @UseGuards(AdminGuard)
+  reconciliationOverview() {
+    return this.reconciliation.overview('ZMW');
+  }
+
+  @Get('reconciliation/batches')
+  @UseGuards(AdminGuard)
+  reconciliationBatches() {
+    return this.reconciliation.listBatches();
+  }
+
+  @Get('reconciliation/batches/:id')
+  @UseGuards(AdminGuard)
+  reconciliationBatch(@Param('id') id: string) {
+    return this.reconciliation.getBatch(id);
+  }
+
+  @Post('reconciliation/batches')
+  @UseGuards(AdminGuard)
+  importSettlementBatch(
+    @Body()
+    body: {
+      provider?: string;
+      currency?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      source?: string;
+      notes?: string;
+      lines?: Array<{
+        kind: SettlementLineKind;
+        amountMinor: number;
+        currency?: string;
+        providerRef: string;
+        internalRef?: string;
+        occurredAt: string;
+        description?: string;
+      }>;
+    },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const batch = this.reconciliation.importBatch({
+      provider: body.provider || 'simulate',
+      currency: body.currency,
+      periodStart: body.periodStart || '',
+      periodEnd: body.periodEnd || '',
+      source: body.source || 'admin_import',
+      importedBy: session.admin.email,
+      notes: body.notes,
+      lines: body.lines || [],
+    });
+    this.store.record(session.admin.email, 'settlement_batch_import', batch.id, body.source);
+    return batch;
+  }
+
+  @Post('reconciliation/batches/:id/match')
+  @UseGuards(AdminGuard)
+  matchSettlementBatch(@Param('id') id: string, @Req() req: Record<string, unknown>) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const batch = this.reconciliation.matchBatch(id, session.admin.email);
+    this.store.record(session.admin.email, 'settlement_batch_match', id);
+    return batch;
+  }
+
+  @Post('reconciliation/batches/:id/close')
+  @UseGuards(AdminGuard)
+  closeSettlementBatch(
+    @Param('id') id: string,
+    @Body() body: { force?: boolean },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const batch = this.reconciliation.closeBatch(id, session.admin.email, body.force === true);
+    this.store.record(session.admin.email, 'settlement_batch_close', id);
+    return batch;
+  }
+
+  @Post('reconciliation/runs')
+  @UseGuards(AdminGuard)
+  runReconciliation(
+    @Body()
+    body: {
+      currency?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      batchIds?: string[];
+    },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const run = this.reconciliation.runPeriod({
+      currency: body.currency,
+      periodStart: body.periodStart || '',
+      periodEnd: body.periodEnd || '',
+      batchIds: body.batchIds,
+      createdBy: session.admin.email,
+    });
+    this.store.record(session.admin.email, 'reconciliation_run', run.id, run.status);
+    return run;
+  }
+
+  @Get('reconciliation/runs')
+  @UseGuards(AdminGuard)
+  reconciliationRuns() {
+    return this.reconciliation.listRuns();
+  }
+
+  @Get('reconciliation/runs/:id')
+  @UseGuards(AdminGuard)
+  reconciliationRun(@Param('id') id: string) {
+    return this.reconciliation.getRun(id);
+  }
+
+  @Get('reconciliation/exceptions')
+  @UseGuards(AdminGuard)
+  reconciliationExceptions() {
+    return this.reconciliation.listExceptions();
+  }
+
+  @Post('reconciliation/exceptions/:id/resolve')
+  @UseGuards(AdminGuard)
+  resolveReconciliationException(
+    @Param('id') id: string,
+    @Body() body: { status?: 'resolved' | 'waived' | 'investigating'; note?: string },
+    @Req() req: Record<string, unknown>,
+  ) {
+    const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const row = this.reconciliation.resolveException({
+      id,
+      status: body.status || 'resolved',
+      actorEmail: session.admin.email,
+      note: body.note,
+    });
+    this.store.record(session.admin.email, `reconciliation_${row.status}`, id, body.note);
+    return row;
   }
 
   @Get('users')
