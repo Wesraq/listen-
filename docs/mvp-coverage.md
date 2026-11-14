@@ -23,14 +23,14 @@ Legend: **Done (prototype)** = clickable / demo path in Flutter · **Partial** =
 | SEA-01–03 | Search, results, filters | Done (prototype) · recent + suggested |
 | CON-01 | Title detail | Done (prototype) |
 | CON-02 | Creator profile | Done (prototype) |
-| PUR-01–03 | Checkout review / pending / result | Done (prototype) · simulated only |
+| PUR-01–03 | Checkout review / pending / result | Done (prototype) · multi-rail intents + simulate confirm → ledger |
 | PUR-04 | Purchase history | Done (prototype) · Profile |
 | LIB-01 | Library + format filters + downloads stub | Done (prototype) |
 | REA-01–03 | Reader, settings, bookmarks | Done (prototype) · sample chapters, not EPUB |
 | REA-04 | Offline state | Partial · downloads empty explanation |
 | AUD-01–03 | Mini / full player, chapters, speed, sleep timer | Done (prototype) · simulated audio |
 | AUD-04 | Downloads | Partial · empty state only |
-| STU-01–15 | Studio apply → draft wizard → earnings/payout preview | Partial · local drafts, illustrative money |
+| STU-01–15 | Studio apply → draft wizard → earnings/payout | Done (prototype) · ledger balances, cashout request, ads earnings |
 | PRO-01–07 | Profile, market, language, notifications, help, legal | Done (prototype) |
 | Admin web | Ops console | Done (prototype) · `apps/admin-web` + seeded `admin@listen.plus` |
 
@@ -39,15 +39,16 @@ Legend: **Done (prototype)** = clickable / demo path in Flutter · **Partial** =
 | Criterion | Status |
 | --- | --- |
 | Register, sign in, select market, browse catalogue | Done (prototype) |
-| Free title or purchase with Zambia method | Partial · simulated checkout UI |
-| Backend verifies payment before access | Partial · mobile syncs entitlements to API in dev; payment webhooks still deferred |
-| Idempotent payment callbacks | Deferred |
+| Free title or purchase with Zambia method | Done (prototype) · simulate / MoMo / Airtel / card intents; live rails deferred |
+| Backend verifies payment before access | Partial · confirm + webhook path settle ledger then grant; live provider webhooks deferred |
+| Idempotent payment callbacks | Done (prototype) · ledger `(referenceType, referenceId)` + webhook event id |
 | Access ebook/audiobook from library | Done (prototype) · sample reader/player |
-| Creator apply, upload, rights, price, submit | Partial · Studio wizard local |
-| Admin approve/reject + history | Partial · admin-web moderation + audit log (in-memory) |
-| Auditable ledger on sale | Deferred |
-| Creator earnings + payout request | Partial · illustrative Studio UI |
-| Finance payout approval | Partial · admin-web payout queue (prototype) |
+| Creator apply, upload, rights, price, submit | Partial · Studio wizard + API drafts / moderation |
+| Admin approve/reject + history | Done (prototype) · admin-web moderation + audit (Firestore-backed when configured) |
+| Auditable ledger on sale | Done (prototype) · shared double-entry engine (see `docs/financial-engine.md`) |
+| Creator earnings + payout request | Done (prototype) · Studio cashout available / hold + `/finance/me/cashouts` |
+| Finance payout approval | Done (prototype) · admin Finance cashouts + ad settlements |
+| Free-with-ads monetisation | Done (prototype) · AdMob rewarded → `/ads/complete` + SSV → 55/45 ledger |
 | Refund/reversal integrity | Deferred |
 | Error/event/admin audit logging | Deferred |
 | Legal docs before commercial launch | Partial · prototype policy screens present |
@@ -60,10 +61,10 @@ Legend: **Done (prototype)** = clickable / demo path in Flutter · **Partial** =
 | No consumer web MVP | Done · root web is reference only |
 | TypeScript modular monolith `apps/api` | Done (scaffold) · catalogue + library/entitlements; Flutter hydrates when reachable |
 | PostgreSQL system of record | Deferred · compose file ready |
-| Firebase Admin token verify | Deferred · `AUTH_MODE=dev` Bearer |
-| Payment adapters / webhooks | Deferred |
-| Signed media / CDN | Deferred |
-| Admin web | Done (prototype) · seeded admin account |
+| Firebase Admin token verify | Partial · `AUTH_MODE=firebase` / Cloud Run `hybrid` |
+| Payment adapters / webhooks | Partial · simulate + webhook scaffold; live MoMo/card keys deferred |
+| Signed media / CDN | Partial · `MEDIA_REQUIRE_SIGNED` + signing secret locally |
+| Admin web | Done (prototype) · seeded admin account · Finance + ads |
 
 ## Explicit non-goals preserved
 
@@ -71,7 +72,11 @@ Social network, full podcast hosting/RSS, unlimited subscriptions, institutional
 
 ## Recommended next engineering slices
 
-1. Postgres + Firebase Admin ID-token verification (replace `AUTH_MODE=dev`).
-2. Payment attempt state machine + webhook idempotency (stop trusting client grants).
-3. Harden `apps/admin-web` (SSO, durable queues, reports/transactions screens).
-4. Real EPUB + audio delivery with signed URLs.
+1. Live MTN MoMo / Airtel / card keys + production webhook secrets (disable simulate confirms).
+2. AdMob production app/unit IDs + SSV URL in AdMob console + signature verify.
+3. Advertiser self-serve campaigns (replace seed `network_default` only).
+4. Harden `apps/admin-web` (SSO, durable reports).
+5. Real EPUB + audio delivery with signed URLs.
+6. Postgres as durable system of record if moving off Firestore-only prototype store.
+
+Full money-path detail: [`docs/financial-engine.md`](./financial-engine.md).

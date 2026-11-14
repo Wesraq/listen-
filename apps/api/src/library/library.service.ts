@@ -64,7 +64,7 @@ export class LibraryService {
       const creatorUid = draft?.creatorUid ?? title.creatorUid;
       if (creatorUid) {
         const deductionsMinor = Math.floor(title.priceMinor * 0.03);
-        this.studio.recordEarning({
+        const sale = this.studio.recordEarning({
           creatorUid,
           titleId,
           titleName: title.name,
@@ -75,6 +75,17 @@ export class LibraryService {
           stream: 'purchase',
           format: this.earningFormat(title.format),
           note: 'Legacy grant · prefer /payments intents for ledger settlement',
+        });
+        this.ledger.settleStudioSale({
+          saleId: sale.id,
+          creatorUid,
+          titleId,
+          currency: sale.currency,
+          creatorShareMinor: sale.creatorShareMinor,
+          platformShareMinor: sale.platformShareMinor,
+          stream: 'purchase',
+          at: sale.at,
+          note: sale.note,
         });
       }
     }
