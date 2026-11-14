@@ -1100,6 +1100,46 @@ class SessionState extends ChangeNotifier {
     if (remote != null) sales = remote;
   }
 
+  Future<void> refreshSales() async {
+    await _syncSalesFromApi();
+    notifyListeners();
+  }
+
+  /// Request a creator cashout against ledger-available balance.
+  Future<bool> requestCashout({
+    required int amountMinor,
+    required String rail,
+    required String destination,
+  }) async {
+    final bearer = await _apiBearer();
+    if (bearer == null) {
+      showNotice('Sign in to request a payout.');
+      return false;
+    }
+    final result = await _api.requestCashout(
+      bearer,
+      amountMinor: amountMinor,
+      rail: rail,
+      destination: destination,
+      currency: sales.currency,
+    );
+    if (result == null) {
+      showNotice('Could not request payout. Check available balance and try again.');
+      return false;
+    }
+    await _syncSalesFromApi();
+    notifyListeners();
+    final net = result['netMinor'];
+    final fee = result['feeMinor'];
+    showNotice(
+      net is num
+          ? 'Payout requested · ${sales.money(net.toInt())} net'
+              '${fee is num && fee > 0 ? ' (fee ${sales.money(fee.toInt())})' : ''}. Pending admin settlement.'
+          : 'Payout requested. Pending admin settlement.',
+    );
+    return true;
+  }
+
   Future<void> _syncDraftsFromApi() async {
     final bearer = await _apiBearer();
     if (bearer == null) return;
@@ -1654,11 +1694,6 @@ class SessionState extends ChangeNotifier {
     notifyListeners();
     await _persist();
     showNotice('Draft deleted.');
-  }
-
-  Future<void> refreshSales() async {
-    await _syncSalesFromApi();
-    notifyListeners();
   }
 
   bool isDownloaded(String titleId) => downloads.any((d) => d.titleId == titleId);

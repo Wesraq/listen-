@@ -1,8 +1,18 @@
-import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthUser } from '../auth/auth.types';
+import type { CashoutRail } from './finance.types';
 import { LedgerService } from './ledger.service';
 
 @Controller('finance')
@@ -22,21 +32,61 @@ export class FinanceController {
     return { subscription: sub ?? null };
   }
 
-  /** Creator payable snapshot from the double-entry ledger (cashout foundation). */
+  /** Creator payable snapshot from the double-entry ledger. */
   @Get('me/balances')
   @UseGuards(AuthGuard)
   myBalances(
     @CurrentUser() user: AuthUser,
     @Query('currency') currency?: string,
   ) {
-    const snap = this.ledger.creatorBalance(
+    return this.ledger.creatorBalance(
       user.uid,
       currency?.trim().toUpperCase() || 'ZMW',
     );
-    return {
-      ...snap,
-      // Hold policy stays in Studio sales dashboard for now; cashout phase will unify.
-      note: 'Payable is ledger liability. Holds/available split lands with cashout module.',
-    };
+  }
+
+  @Get('me/cashouts')
+  @UseGuards(AuthGuard)
+  myCashouts(@CurrentUser() user: AuthUser) {
+    return { items: this.ledger.listCashoutsForCreator(user.uid) };
+  }
+
+  @Post('me/cashouts')
+  @UseGuards(AuthGuard)
+  requestCashout(
+    @CurrentUser() user: AuthUser,
+    @Body()
+    body: {
+      amountMinor?: number;
+      currency?: string;
+      rail?: CashoutRail | string;
+      destination?: string;
+    },
+  ) {
+    const amountMinor = Math.floor(Number(body.amountMinor));
+    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+      throw new BadRequestException('amountMinor is required');
+    }
+    const rail = this.normalizeRail(body.rail);
+    const destination = body.destination?.trim();
+    if (!destination) {
+      throw new BadRequestException('destination is required (MoMo number or bank reference)');
+    }
+    return this.ledger.requestCashout({
+      creatorUid: user.uid,
+      creatorName: user.displayName || user.email || user.uid,
+      creatorEmail: user.email,
+      amountMinor,
+      currency: body.currency,
+      rail,
+      destination,
+    });
+  }
+
+  private normalizeRail(raw?: string): CashoutRail {
+    const value = (raw ?? 'mtn_momo').trim().toLowerCase();
+    if (value === 'airtel_money' || value === 'airtel') return 'airtel_money';
+    if (value === 'bank' || value === 'bank_transfer') return 'bank';
+    return 'mtn_momo';
   }
 }

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { CatalogueModule } from '../catalogue/catalogue.module';
+import { FinanceModule } from '../finance/finance.module';
 import { LibraryModule } from '../library/library.module';
 import { StudioModule } from '../studio/studio.module';
 import { AdminController } from './admin.controller';
@@ -9,7 +10,7 @@ import { AdminStore } from './admin.store';
 import { CatalogueRestoreService } from './catalogue-restore.service';
 
 @Module({
-  imports: [StudioModule, CatalogueModule, LibraryModule],
+  imports: [StudioModule, CatalogueModule, LibraryModule, FinanceModule],
   controllers: [AdminController],
   providers: [AdminStore, AdminGuard, CatalogueRestoreService],
   exports: [AdminStore],

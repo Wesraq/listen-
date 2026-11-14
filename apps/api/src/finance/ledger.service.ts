@@ -1,7 +1,15 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
 import type {
+  CashoutRail,
+  CashoutRequest,
+  CashoutStatus,
   CreatorBalanceSnapshot,
   LedgerAccountCode,
   LedgerEntryKind,
@@ -13,6 +21,11 @@ import type {
 } from './finance.types';
 import { creatorPayableAccount, isDebitNormal } from './finance.types';
 import { LedgerStore } from './ledger.store';
+
+const HOLD_DAYS = 7;
+const MIN_PAYOUT_MINOR = 50_00;
+/** Flat payout fee in minor units (creator-paid). */
+const PAYOUT_FEE_MINOR = 2_00;
 
 @Injectable()
 export class LedgerService {
@@ -332,21 +345,196 @@ export class LedgerService {
     const account = creatorPayableAccount(creatorUid);
     let earned = 0;
     let paidOut = 0;
+    let pendingHold = 0;
+    const holdMs = HOLD_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
     for (const journal of this.store.listJournals()) {
       if (journal.currency !== currency) continue;
+      const age = now - new Date(journal.at).getTime();
       for (const line of journal.lines) {
         if (line.account !== account) continue;
         earned += line.creditMinor;
         paidOut += line.debitMinor;
+        if (line.creditMinor > 0 && age >= 0 && age < holdMs) {
+          pendingHold += line.creditMinor;
+        }
       }
     }
+
+    const payable = Math.max(0, earned - paidOut);
+    const inFlight = this.store
+      .listCashouts()
+      .filter(
+        (c) =>
+          c.creatorUid === creatorUid &&
+          c.currency === currency &&
+          (c.status === 'requested' || c.status === 'approved'),
+      )
+      .reduce((sum, c) => sum + c.amountMinor, 0);
+
+    const available = Math.max(0, payable - pendingHold - inFlight);
+
     return {
       creatorUid,
       currency,
       earnedMinor: earned,
       paidOutMinor: paidOut,
-      payableMinor: Math.max(0, earned - paidOut),
+      payableMinor: payable,
+      pendingHoldMinor: Math.min(pendingHold, payable),
+      inFlightMinor: inFlight,
+      availableMinor: available,
+      holdDays: HOLD_DAYS,
+      minPayoutMinor: MIN_PAYOUT_MINOR,
     };
+  }
+
+  listCashoutsForCreator(creatorUid: string): CashoutRequest[] {
+    return this.store.listCashouts().filter((c) => c.creatorUid === creatorUid);
+  }
+
+  listAllCashouts(): CashoutRequest[] {
+    return this.store.listCashouts();
+  }
+
+  getCashout(id: string): CashoutRequest | undefined {
+    return this.store.getCashout(id);
+  }
+
+  requestCashout(input: {
+    creatorUid: string;
+    creatorName: string;
+    creatorEmail?: string;
+    amountMinor: number;
+    currency?: string;
+    rail: CashoutRail;
+    destination: string;
+  }): CashoutRequest {
+    const currency = (input.currency || 'ZMW').toUpperCase();
+    const amount = Math.floor(input.amountMinor);
+    if (amount <= 0) throw new BadRequestException('amountMinor must be positive');
+
+    const destination = input.destination.trim();
+    if (!destination) throw new BadRequestException('destination is required');
+
+    const bal = this.creatorBalance(input.creatorUid, currency);
+    if (amount < bal.minPayoutMinor) {
+      throw new BadRequestException(
+        `Minimum payout is ${bal.minPayoutMinor} ${currency} minor units`,
+      );
+    }
+    if (amount > bal.availableMinor) {
+      throw new BadRequestException(
+        `Requested ${amount} exceeds available ${bal.availableMinor} ${currency}`,
+      );
+    }
+
+    const feeMinor = Math.min(PAYOUT_FEE_MINOR, Math.max(0, amount - 1));
+    const now = new Date().toISOString();
+    const row: CashoutRequest = {
+      id: `po_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+      creatorUid: input.creatorUid,
+      creatorEmail: input.creatorEmail,
+      creatorName: input.creatorName.trim() || input.creatorEmail || input.creatorUid,
+      amountMinor: amount,
+      feeMinor,
+      netMinor: Math.max(0, amount - feeMinor),
+      currency,
+      rail: input.rail,
+      destination,
+      status: 'requested',
+      requestedAt: now,
+      updatedAt: now,
+    };
+    this.store.saveCashout(row);
+    return row;
+  }
+
+  decideCashout(input: {
+    id: string;
+    status: Extract<CashoutStatus, 'approved' | 'rejected' | 'settled' | 'failed'>;
+    actorEmail: string;
+    providerRef?: string;
+    failureReason?: string;
+  }): CashoutRequest {
+    const row = this.store.getCashout(input.id);
+    if (!row) throw new NotFoundException(`Cashout ${input.id} not found`);
+
+    if (input.status === 'rejected' || input.status === 'failed') {
+      if (row.status === 'settled') {
+        throw new BadRequestException('Settled cashouts cannot be rejected');
+      }
+      row.status = input.status;
+      row.failureReason = input.failureReason;
+      row.decidedAt = new Date().toISOString();
+      row.decidedBy = input.actorEmail;
+      row.updatedAt = row.decidedAt;
+      if (input.providerRef) row.providerRef = input.providerRef;
+      this.store.saveCashout(row);
+      return row;
+    }
+
+    if (input.status === 'approved') {
+      if (row.status !== 'requested' && row.status !== 'approved') {
+        throw new BadRequestException(`Cannot approve cashout in status ${row.status}`);
+      }
+      row.status = 'approved';
+      row.decidedAt = new Date().toISOString();
+      row.decidedBy = input.actorEmail;
+      row.updatedAt = row.decidedAt;
+      if (input.providerRef) row.providerRef = input.providerRef;
+      this.store.saveCashout(row);
+      return row;
+    }
+
+    // settled — debit creator payable; cash leaves for net; fee retained as revenue
+    if (row.status === 'settled' && row.journalId) return row;
+    if (row.status === 'rejected' || row.status === 'failed') {
+      throw new BadRequestException(`Cannot settle cashout in status ${row.status}`);
+    }
+
+    const lines: LedgerLine[] = [
+      {
+        account: creatorPayableAccount(row.creatorUid),
+        debitMinor: row.amountMinor,
+        creditMinor: 0,
+        memo: `Cashout ${row.rail}`,
+      },
+      {
+        account: 'assets:processor_clearing',
+        debitMinor: 0,
+        creditMinor: row.netMinor,
+        memo: 'Net sent to creator rail',
+      },
+    ];
+    if (row.feeMinor > 0) {
+      lines.push({
+        account: 'revenue:payout_fees',
+        debitMinor: 0,
+        creditMinor: row.feeMinor,
+        memo: 'Payout fee retained by Listen+',
+      });
+    }
+
+    const journal = this.postJournal({
+      kind: 'payout',
+      currency: row.currency,
+      referenceType: 'cashout',
+      referenceId: row.id,
+      lines,
+      memo: `Creator cashout ${row.id}`,
+      creatorUid: row.creatorUid,
+      providerRef: input.providerRef || row.providerRef,
+    });
+
+    row.status = 'settled';
+    row.journalId = journal.id;
+    row.providerRef = input.providerRef || row.providerRef || `cashout_${row.id}`;
+    row.decidedAt = new Date().toISOString();
+    row.decidedBy = input.actorEmail;
+    row.updatedAt = row.decidedAt;
+    this.store.saveCashout(row);
+    return row;
   }
 
   recentJournals(limit = 50): LedgerJournal[] {

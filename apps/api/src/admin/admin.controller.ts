@@ -12,11 +12,12 @@ import {
 } from '@nestjs/common';
 
 import { CatalogueService } from '../catalogue/catalogue.service';
+import { LedgerService } from '../finance/ledger.service';
 import { LibraryStore } from '../library/library.store';
 import { StudioStore } from '../studio/studio.store';
 import { AdminGuard, ADMIN_SESSION_KEY } from './admin.guard';
 import { AdminStore } from './admin.store';
-import { AdminSession, ModerationItem } from './admin.types';
+import { AdminSession, ModerationItem, PayoutRequest } from './admin.types';
 
 @Controller('admin')
 export class AdminController {
@@ -25,6 +26,7 @@ export class AdminController {
     @Inject(StudioStore) private readonly studio: StudioStore,
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
     @Inject(LibraryStore) private readonly library: LibraryStore,
+    @Inject(LedgerService) private readonly ledger: LedgerService,
   ) {}
 
   @Post('auth/login')
@@ -304,7 +306,20 @@ export class AdminController {
   @Get('payouts')
   @UseGuards(AdminGuard)
   payouts() {
-    return { items: this.store.listPayouts() };
+    const seeded = this.store.listPayouts();
+    const fromLedger: PayoutRequest[] = this.ledger.listAllCashouts().map((c) => ({
+      id: c.id,
+      creatorName: c.creatorName,
+      amountMinor: c.amountMinor,
+      currency: c.currency,
+      status: c.status === 'failed' ? 'rejected' : c.status,
+      requestedAt: c.requestedAt,
+      reference: c.providerRef || `${c.rail}:${c.destination}`,
+    }));
+    const seededIds = new Set(seeded.map((p) => p.id));
+    return {
+      items: [...fromLedger.filter((p) => !seededIds.has(p.id)), ...seeded],
+    };
   }
 
   @Post('payouts/:id/decision')
@@ -319,6 +334,29 @@ export class AdminController {
     @Req() req: Record<string, unknown>,
   ) {
     const session = req[ADMIN_SESSION_KEY] as AdminSession;
+    const cashout = this.ledger.getCashout(id);
+    if (cashout) {
+      const updated = this.ledger.decideCashout({
+        id,
+        status: body.status,
+        actorEmail: session.admin.email,
+        providerRef: body.reference,
+        failureReason: body.status === 'rejected' ? body.reference : undefined,
+      });
+      this.store.record(session.admin.email, `payout_${body.status}`, id, body.reference);
+      return {
+        id: updated.id,
+        creatorName: updated.creatorName,
+        amountMinor: updated.amountMinor,
+        currency: updated.currency,
+        status: updated.status === 'failed' ? 'rejected' : updated.status,
+        requestedAt: updated.requestedAt,
+        reference: updated.providerRef || `${updated.rail}:${updated.destination}`,
+        journalId: updated.journalId,
+        netMinor: updated.netMinor,
+        feeMinor: updated.feeMinor,
+      };
+    }
     const updated = this.store.decidePayout(id, body.status, session.admin.email, body.reference);
     if (!updated) throw new NotFoundException('Payout request not found');
     return updated;

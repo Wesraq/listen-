@@ -4,7 +4,12 @@ import { dirname, join } from 'path';
 
 import { DbService } from '../db/db.service';
 import { FirestoreService } from '../db/firestore.service';
-import type { LedgerJournal, Subscription, SubscriptionPlan } from './finance.types';
+import type {
+  CashoutRequest,
+  LedgerJournal,
+  Subscription,
+  SubscriptionPlan,
+} from './finance.types';
 
 @Injectable()
 export class LedgerStore implements OnModuleInit {
@@ -12,6 +17,7 @@ export class LedgerStore implements OnModuleInit {
   private readonly dataFile = join(process.cwd(), '.data', 'finance-ledger.json');
   private readonly journals: LedgerJournal[] = [];
   private readonly subscriptions = new Map<string, Subscription>();
+  private readonly cashouts = new Map<string, CashoutRequest>();
   /** Intent / reference ids already settled — settlement idempotency. */
   private readonly settledRefs = new Set<string>();
 
@@ -93,16 +99,33 @@ export class LedgerStore implements OnModuleInit {
     void this.persistSubscription(sub);
   }
 
+  listCashouts(): CashoutRequest[] {
+    return [...this.cashouts.values()].sort((a, b) =>
+      b.requestedAt.localeCompare(a.requestedAt),
+    );
+  }
+
+  getCashout(id: string): CashoutRequest | undefined {
+    return this.cashouts.get(id);
+  }
+
+  saveCashout(row: CashoutRequest) {
+    this.cashouts.set(row.id, row);
+    void this.persistCashout(row);
+  }
+
   private loadFromDisk() {
     try {
       if (!existsSync(this.dataFile)) return;
       const raw = JSON.parse(readFileSync(this.dataFile, 'utf8')) as {
         journals?: LedgerJournal[];
         subscriptions?: Subscription[];
+        cashouts?: CashoutRequest[];
         settledRefs?: string[];
       };
       for (const j of raw.journals ?? []) this.journals.push(j);
       for (const s of raw.subscriptions ?? []) this.subscriptions.set(s.id, s);
+      for (const c of raw.cashouts ?? []) this.cashouts.set(c.id, c);
       for (const r of raw.settledRefs ?? []) this.settledRefs.add(r);
       this.logger.log(`Loaded ${this.journals.length} ledger journal(s) from disk`);
     } catch (error) {
@@ -119,6 +142,7 @@ export class LedgerStore implements OnModuleInit {
           {
             journals: this.journals,
             subscriptions: [...this.subscriptions.values()],
+            cashouts: [...this.cashouts.values()],
             settledRefs: [...this.settledRefs],
           },
           null,
@@ -145,6 +169,10 @@ export class LedgerStore implements OnModuleInit {
       for (const row of subs) {
         if (row.payload?.id) this.subscriptions.set(row.payload.id, row.payload);
       }
+      const cashouts = await this.fs.list<{ payload: CashoutRequest }>('finance_cashouts');
+      for (const row of cashouts) {
+        if (row.payload?.id) this.cashouts.set(row.payload.id, row.payload);
+      }
       this.logger.log(`Loaded ${this.journals.length} ledger journal(s) from Firestore`);
     } catch (error) {
       this.logger.warn(`Failed to load finance ledger from Firestore: ${error}`);
@@ -167,6 +195,12 @@ export class LedgerStore implements OnModuleInit {
       );
       for (const row of subs.rows) {
         if (row.payload?.id) this.subscriptions.set(row.payload.id, row.payload);
+      }
+      const cashouts = await this.db.query<{ payload: CashoutRequest }>(
+        'SELECT payload FROM finance_cashouts',
+      );
+      for (const row of cashouts.rows) {
+        if (row.payload?.id) this.cashouts.set(row.payload.id, row.payload);
       }
       this.logger.log(`Loaded ${this.journals.length} ledger journal(s) from Postgres`);
     } catch (error) {
@@ -231,6 +265,35 @@ export class LedgerStore implements OnModuleInit {
         return;
       } catch (error) {
         this.logger.warn(`Failed to persist subscription to Postgres: ${error}`);
+      }
+    }
+    this.persistDisk();
+  }
+
+  private async persistCashout(row: CashoutRequest) {
+    if (this.fs.enabled) {
+      try {
+        await this.fs.set('finance_cashouts', row.id, { payload: row });
+        return;
+      } catch (error) {
+        this.logger.warn(`Failed to persist cashout to Firestore: ${error}`);
+      }
+    }
+    if (this.db.enabled) {
+      try {
+        await this.db.query(
+          `INSERT INTO finance_cashouts (id, creator_uid, status, payload, updated_at)
+           VALUES ($1, $2, $3, $4::jsonb, NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             creator_uid = EXCLUDED.creator_uid,
+             status = EXCLUDED.status,
+             payload = EXCLUDED.payload,
+             updated_at = NOW()`,
+          [row.id, row.creatorUid, row.status, JSON.stringify(row)],
+        );
+        return;
+      } catch (error) {
+        this.logger.warn(`Failed to persist cashout to Postgres: ${error}`);
       }
     }
     this.persistDisk();

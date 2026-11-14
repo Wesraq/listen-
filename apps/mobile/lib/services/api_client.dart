@@ -358,6 +358,63 @@ class ListenApiClient {
     }
   }
 
+  Future<Map<String, dynamic>?> requestCashout(
+    String bearerToken, {
+    required int amountMinor,
+    required String rail,
+    required String destination,
+    String currency = 'ZMW',
+  }) async {
+    try {
+      final response = await _client
+          .post(
+            _uri('/finance/me/cashouts'),
+            headers: {
+              'Authorization': 'Bearer $bearerToken',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'amountMinor': amountMinor,
+              'currency': currency,
+              'rail': rail,
+              'destination': destination,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
+      final decoded = jsonDecode(response.body);
+      return decoded is Map<String, dynamic>
+          ? decoded
+          : decoded is Map
+              ? Map<String, dynamic>.from(decoded)
+              : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>?> fetchCashouts(String bearerToken) async {
+    try {
+      final response = await _client
+          .get(
+            _uri('/finance/me/cashouts'),
+            headers: {'Authorization': 'Bearer $bearerToken'},
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return null;
+      final items = decoded['items'];
+      if (items is! List) return null;
+      return items
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<SalesDashboard?> fetchSales(String bearerToken) async {
     try {
       final response = await _client

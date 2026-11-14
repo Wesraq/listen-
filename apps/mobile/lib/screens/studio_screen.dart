@@ -453,11 +453,7 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
           _EarningsPanel(
             sales: sales,
             onRefresh: () => session.refreshSales(),
-            onPayout: () {
-              session.showNotice(
-                'Payout request recorded for ${sales.money(sales.availableMinor)}. We’ll confirm it before sending funds.',
-              );
-            },
+            onPayout: () => _showCashoutSheet(context, session, sales),
           ),
         ],
       ],
@@ -465,6 +461,116 @@ class _ApprovedStudioState extends State<_ApprovedStudio> {
   }
 
 
+
+  Future<void> _showCashoutSheet(
+    BuildContext context,
+    SessionState session,
+    SalesDashboard sales,
+  ) async {
+    if (sales.availableMinor < sales.policy.minPayoutMinor) {
+      session.showNotice(
+        'Available balance is below the minimum payout (${sales.money(sales.policy.minPayoutMinor)}).',
+      );
+      return;
+    }
+
+    var rail = 'mtn_momo';
+    final destination = TextEditingController();
+    final amount = TextEditingController(
+      text: (sales.availableMinor / 100).toStringAsFixed(2),
+    );
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                0,
+                20,
+                MediaQuery.viewInsetsOf(context).bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Request payout', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Available ${sales.money(sales.availableMinor)}. A small fee is deducted on settlement. Admin confirms before funds leave Listen+.',
+                    style: TextStyle(color: ListenColors.ink.withValues(alpha: 0.62), height: 1.35),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: amount,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'Amount (${sales.currency})',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: rail,
+                    decoration: const InputDecoration(
+                      labelText: 'Payout method',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'mtn_momo', child: Text('MTN Mobile Money')),
+                      DropdownMenuItem(value: 'airtel_money', child: Text('Airtel Money')),
+                      DropdownMenuItem(value: 'bank', child: Text('Bank transfer')),
+                    ],
+                    onChanged: (value) => setModalState(() => rail = value ?? rail),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: destination,
+                    keyboardType: rail == 'bank' ? TextInputType.text : TextInputType.phone,
+                    decoration: InputDecoration(
+                      labelText: rail == 'bank' ? 'Bank account reference' : 'Mobile money number',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('Submit payout request'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (submitted != true) {
+      destination.dispose();
+      amount.dispose();
+      return;
+    }
+
+    final major = double.tryParse(amount.text.trim().replaceAll(',', '')) ?? 0;
+    final amountMinor = (major * 100).round();
+    final dest = destination.text.trim();
+    destination.dispose();
+    amount.dispose();
+
+    if (amountMinor <= 0 || dest.isEmpty) {
+      session.showNotice('Enter a valid amount and destination.');
+      return;
+    }
+
+    await session.requestCashout(
+      amountMinor: amountMinor,
+      rail: rail,
+      destination: dest,
+    );
+  }
 
   Future<void> _manageParts(
     BuildContext context,
@@ -1199,7 +1305,8 @@ class _EarningsPanel extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Available ${sales.money(sales.availableMinor)} · Pending ${sales.money(sales.pendingMinor)}',
+                'Available ${sales.money(sales.availableMinor)} · Pending ${sales.money(sales.pendingMinor)}'
+                '${sales.paidOutMinor > 0 ? ' · Paid out ${sales.money(sales.paidOutMinor)}' : ''}',
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.78), fontSize: 12),
               ),
               const SizedBox(height: 14),

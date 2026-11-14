@@ -143,4 +143,14 @@ CREATE TABLE IF NOT EXISTS finance_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS finance_subscriptions_uid_idx ON finance_subscriptions (uid);
+
+CREATE TABLE IF NOT EXISTS finance_cashouts (
+  id TEXT PRIMARY KEY,
+  creator_uid TEXT NOT NULL,
+  status TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS finance_cashouts_creator_idx ON finance_cashouts (creator_uid);
 `;

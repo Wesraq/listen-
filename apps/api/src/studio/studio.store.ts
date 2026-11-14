@@ -579,7 +579,7 @@ export class StudioStore implements OnModuleInit {
       else if (row.format === 'audiobook') byFormat.audiobookMinor += row.creatorShareMinor;
       else byFormat.podcastMinor += row.creatorShareMinor;
     }
-    // 30-day hold prototype: ~20% pending until reconciliation.
+    // Fallback hold when ledger balances are not merged by the controller.
     const pendingMinor = Math.floor(creatorTotal * 0.2);
     const availableMinor = Math.max(0, creatorTotal - pendingMinor);
     return {
@@ -601,7 +601,7 @@ export class StudioStore implements OnModuleInit {
           audiobookBps: 4500,
           podcastBps: 2500,
         },
-        minPayoutMinor: 20000,
+        minPayoutMinor: 5000,
       },
       sales: sameCurrency,
     };

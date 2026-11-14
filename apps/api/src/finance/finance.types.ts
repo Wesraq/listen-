@@ -13,6 +13,7 @@ export type SystemAccountCode =
   | 'revenue:content_sales'
   | 'revenue:subscription'
   | 'revenue:advertising'
+  | 'revenue:payout_fees'
   | 'expense:processing_fees'
   | 'expense:refunds'
   | 'expense:payout_fees';
@@ -69,8 +70,50 @@ export interface CreatorBalanceSnapshot {
   earnedMinor: number;
   /** Debits against payable (cashouts). */
   paidOutMinor: number;
-  /** earned − paidOut (available + pending holds applied by policy layer). */
+  /** earned − paidOut (before holds / in-flight requests). */
   payableMinor: number;
+  /** Earnings still inside the hold window. */
+  pendingHoldMinor: number;
+  /** Cashout requests not yet settled/rejected. */
+  inFlightMinor: number;
+  /** Max that can be requested now. */
+  availableMinor: number;
+  /** Hold window used for pendingHoldMinor. */
+  holdDays: number;
+  minPayoutMinor: number;
+}
+
+export type CashoutRail = 'mtn_momo' | 'airtel_money' | 'bank';
+
+export type CashoutStatus =
+  | 'requested'
+  | 'approved'
+  | 'rejected'
+  | 'settled'
+  | 'failed';
+
+export interface CashoutRequest {
+  id: string;
+  creatorUid: string;
+  creatorEmail?: string;
+  creatorName: string;
+  amountMinor: number;
+  /** Fee deducted from the creator’s payout (posted on settle). */
+  feeMinor: number;
+  /** Net sent to the creator rail. */
+  netMinor: number;
+  currency: string;
+  rail: CashoutRail;
+  /** MSISDN or bank account reference. */
+  destination: string;
+  status: CashoutStatus;
+  requestedAt: string;
+  updatedAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  providerRef?: string;
+  failureReason?: string;
+  journalId?: string;
 }
 
 export interface SubscriptionPlan {

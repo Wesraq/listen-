@@ -16,6 +16,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { CatalogueService } from '../catalogue/catalogue.service';
+import { LedgerService } from '../finance/ledger.service';
 import { StudioStore } from './studio.store';
 import {
   PriceByCurrency,
@@ -30,6 +31,7 @@ export class StudioController {
   constructor(
     @Inject(StudioStore) private readonly studio: StudioStore,
     @Inject(CatalogueService) private readonly catalogue: CatalogueService,
+    @Inject(LedgerService) private readonly ledger: LedgerService,
   ) {}
 
   @Get('drafts')
@@ -180,7 +182,24 @@ export class StudioController {
 
   @Get('sales')
   sales(@CurrentUser() user: AuthUser) {
-    return this.studio.salesFor(user.uid, user.email);
+    const dashboard = this.studio.salesFor(user.uid, user.email);
+    const bal = this.ledger.creatorBalance(user.uid, dashboard.currency);
+    // Prefer ledger balances when any settlement has posted; keep sale lines for history.
+    if (bal.earnedMinor > 0 || bal.paidOutMinor > 0 || bal.inFlightMinor > 0) {
+      return {
+        ...dashboard,
+        grossSalesMinor: Math.max(dashboard.grossSalesMinor, bal.earnedMinor),
+        availableMinor: bal.availableMinor,
+        pendingMinor: bal.pendingHoldMinor + bal.inFlightMinor,
+        paidOutMinor: bal.paidOutMinor,
+        policy: {
+          ...dashboard.policy,
+          minPayoutMinor: bal.minPayoutMinor,
+        },
+        ledger: bal,
+      };
+    }
+    return dashboard;
   }
 
   /** Keep live catalogue chapters/episodes in sync when the creator edits parts. */
