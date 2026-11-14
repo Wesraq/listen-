@@ -59,7 +59,7 @@ gcloud run deploy "$SERVICE" \
   --cpu=1 \
   --min-instances=0 \
   --max-instances=3 \
-  --set-env-vars="DATA_BACKEND=firestore,MEDIA_BACKEND=firebase,AUTH_MODE=hybrid,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_STORAGE_BUCKET=${PROJECT_ID}.firebasestorage.app,FIRESTORE_PREFIX=listen,PAYMENTS_MODE=simulate,ALLOW_CLIENT_GRANTS=true,PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET:-change-me}"
+  --set-env-vars="DATA_BACKEND=firestore,MEDIA_BACKEND=firebase,AUTH_MODE=hybrid,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_STORAGE_BUCKET=${PROJECT_ID}.firebasestorage.app,FIRESTORE_PREFIX=listen,PAYMENTS_MODE=simulate,ALLOW_SIMULATED_PAYMENTS=true,ALLOW_CLIENT_GRANTS=true,PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET:-change-me}"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')"
 echo ""
